@@ -45,7 +45,7 @@ IN_CLOUD = "PORT" in os.environ
 PORT = int(os.environ.get("PORT", 8000))
 HOST = os.environ.get("HOST", "0.0.0.0" if IN_CLOUD else "127.0.0.1")
 PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
-CRON_SECRET = os.environ.get("CRON_SECRET", "")
+CRON_SECRET = os.environ.get("CRON_SECRET", "").strip()  # ignore stray spaces from copy-paste
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 STATIC_TYPES = {".html": "text/html", ".css": "text/css", ".js": "text/javascript"}
