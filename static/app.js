@@ -14,6 +14,9 @@ const longDate = (iso) =>
   toDate(iso).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
 const daysBetween = (a, b) => Math.round((toDate(b) - toDate(a)) / DAY_MS);
 const addDays = (iso, n) => new Date(toDate(iso).getTime() + n * DAY_MS).toISOString().slice(0, 10);
+// When a check ran, shown in Eastern time like the morning schedule ("11:27 AM ET").
+const checkTime = (stamp) =>
+  stamp ? new Date(stamp).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }) + " ET" : "—";
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -339,6 +342,7 @@ function dateDetail(route, trip) {
   if (point.airline) subParts.push(point.airline);
   if (point.typical_low != null) subParts.push("Typical " + money(point.typical_low) + "–" + money(point.typical_high));
   main.append(el("div", "hero-sub", subParts.join(" · ")));
+  main.append(el("div", "hero-sub", "Checked " + shortDate(point.checked_on) + ", " + checkTime(point.checked_at)));
   top.append(main);
 
   const facts = el("div", "facts");
@@ -384,12 +388,13 @@ function historyTable(route) {
   details.append(el("summary", null, "All prices (" + route.history.length + ")"));
   const table = el("table", "history-table");
   const head = el("tr");
-  ["Date", "Price", "Google says", "Cheapest airline"].forEach((h) => head.append(el("th", null, h)));
+  ["Date", "Checked at", "Price", "Google says", "Cheapest airline"].forEach((h) => head.append(el("th", null, h)));
   table.append(head);
   for (const p of [...route.history].reverse()) {
     const row = el("tr");
     row.append(
       el("td", null, longDate(p.checked_on)),
+      el("td", null, checkTime(p.checked_at)),
       el("td", null, money(p.price)),
       el("td", null, p.price_level ? capitalise(p.price_level) : "—"),
       el("td", null, p.airline || "—"),
@@ -435,7 +440,7 @@ function rangeView(point) {
 
 function chartSection(route, point) {
   const box = el("div");
-  const checks = route.history.map((p) => ({ date: p.checked_on, price: p.price, airline: p.airline }));
+  const checks = route.history.map((p) => ({ date: p.checked_on, price: p.price, airline: p.airline, at: p.checked_at }));
   // Google's history is shown for the days before you started tracking.
   const firstCheck = checks.length ? checks[0].date : null;
   const context = route.google_history
@@ -590,7 +595,7 @@ function drawChart(container, { checks, context, band, range }) {
   tooltip.hidden = true;
   const byDate = new Map();
   for (const p of ctx) byDate.set(p.date, { date: p.date, google: p.price });
-  for (const p of mine) byDate.set(p.date, Object.assign(byDate.get(p.date) || { date: p.date }, { mine: p.price, airline: p.airline }));
+  for (const p of mine) byDate.set(p.date, Object.assign(byDate.get(p.date) || { date: p.date }, { mine: p.price, airline: p.airline, at: p.at }));
   const days = [...byDate.values()];
 
   const move = (event) => {
@@ -613,7 +618,7 @@ function drawChart(container, { checks, context, band, range }) {
       r.append(el("i", keyClass), label, el("strong", null, money(price)));
       tooltip.append(r);
     };
-    if (near.mine != null) row("key-line", near.airline ? "Your check · " + near.airline : "Your check", near.mine);
+    if (near.mine != null) row("key-line", ["Your check · " + checkTime(near.at), near.airline].filter(Boolean).join(" · "), near.mine);
     if (near.google != null) row("key-line context", "Google", near.google);
     tooltip.hidden = false;
     const left = Math.min(Math.max(cx - tooltip.offsetWidth / 2, 0), width - tooltip.offsetWidth);
