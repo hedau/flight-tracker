@@ -26,26 +26,37 @@
     <section class="panel">
       <h2>Track a new flight</h2>
       <p class="muted small">Use 3-letter airport codes, like JFK (New York), LAX (Los Angeles) or BOM (Mumbai).</p>
-      <form class="add" id="add-form">
-        <label>From
-          <input class="code" name="origin" maxlength="3" placeholder="JFK" required>
-        </label>
-        <label>To
-          <input class="code" name="destination" maxlength="3" placeholder="LAX" required>
-        </label>
-        <label>Trip
-          <select name="trip_type" id="trip-type">
-            <option value="one_way">One-way</option>
-            <option value="round_trip">Round trip</option>
-          </select>
-        </label>
-        <label>Depart
-          <input type="date" name="depart_date" required>
-        </label>
-        <label id="return-field" hidden>Return
-          <input type="date" name="return_date">
-        </label>
-        <button type="submit" id="add-button">Start tracking</button>
+      <form id="add-form">
+        <div class="add">
+          <label>From
+            <input class="code" name="origin" maxlength="3" placeholder="JFK" required>
+          </label>
+          <label>To
+            <input class="code" name="destination" maxlength="3" placeholder="LAX" required>
+          </label>
+          <label>Trip
+            <select name="trip_type" id="trip-type">
+              <option value="one_way">One-way</option>
+              <option value="round_trip">Round trip</option>
+            </select>
+          </label>
+        </div>
+
+        <fieldset>
+          <legend>Airlines <span class="muted small">(none ticked = any airline)</span></legend>
+          <div class="airlines" id="airlines"></div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Dates <span class="muted small">(each date is tracked separately)</span></legend>
+          <div id="date-rows"></div>
+          <button type="button" class="link" id="add-date">+ Add another date</button>
+        </fieldset>
+
+        <div class="submit-row">
+          <button type="submit" id="add-button">Start tracking</button>
+          <span class="muted small" id="budget"></span>
+        </div>
       </form>
       <p class="error" id="form-error" role="alert"></p>
     </section>

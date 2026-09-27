@@ -35,15 +35,21 @@ async function loadRoutes() {
   state = data;
   document.getElementById("demo-banner").hidden = !data.demo;
   document.getElementById("logout").hidden = !data.login_required;
+  buildAirlineChips();
   renderRoutes();
+  updateBudget();
 }
+
+let searchesLeft = null;
 
 async function loadUsage() {
   try {
     const { usage } = await api("/api/usage");
     if (usage && usage.left != null) {
+      searchesLeft = usage.left;
       document.getElementById("usage").textContent =
         usage.left + " of " + usage.per_month + " searches left this month";
+      updateBudget();
     }
   } catch (err) {
     // Not important enough to show an error for.
@@ -54,28 +60,107 @@ async function loadUsage() {
 
 const form = document.getElementById("add-form");
 const tripType = document.getElementById("trip-type");
-const returnField = document.getElementById("return-field");
+const dateRows = document.getElementById("date-rows");
+const addDateButton = document.getElementById("add-date");
 
-tripType.addEventListener("change", () => {
+function buildAirlineChips() {
+  const box = document.getElementById("airlines");
+  if (box.children.length) return; // already built
+  for (const [code, name] of Object.entries(state.airlines)) {
+    const chip = el("label", "chip");
+    const box_ = el("input");
+    box_.type = "checkbox";
+    box_.name = "airline";
+    box_.value = code;
+    chip.append(box_, document.createTextNode(name));
+    box.append(chip);
+  }
+}
+
+function addDateRow() {
+  const row = el("div", "date-row");
+  const depart = el("label", null, "Depart");
+  const departInput = el("input");
+  departInput.type = "date";
+  departInput.className = "depart";
+  departInput.required = true;
+  depart.append(departInput);
+
+  const back = el("label", "return-field", "Return");
+  const backInput = el("input");
+  backInput.type = "date";
+  backInput.className = "return";
+  back.append(backInput);
+
+  const remove = el("button", "link remove-date", "Remove");
+  remove.type = "button";
+  remove.addEventListener("click", () => {
+    row.remove();
+    updateDateRows();
+  });
+
+  row.append(depart, back, remove);
+  dateRows.append(row);
+  updateDateRows();
+  return row;
+}
+
+// Show or hide return dates and Remove buttons to match the form.
+function updateDateRows() {
   const roundTrip = tripType.value === "round_trip";
-  returnField.hidden = !roundTrip;
-  form.return_date.required = roundTrip;
-});
+  const today = state.today || "";
+  const rows = [...dateRows.children];
+  for (const row of rows) {
+    row.querySelector(".return-field").hidden = !roundTrip;
+    row.querySelector(".return").required = roundTrip;
+    row.querySelector(".depart").min = today;
+    row.querySelector(".return").min = row.querySelector(".depart").value || today;
+    row.querySelector(".remove-date").hidden = rows.length === 1;
+  }
+  addDateButton.hidden = rows.length >= (state.max_dates || 5);
+  updateBudget();
+}
+
+function updateBudget() {
+  const adding = dateRows.children.length;
+  const tracking = state.routes.filter((r) => r.active).length;
+  const perMonth = (tracking + adding) * 30;
+  let text = "Uses " + adding + (adding === 1 ? " search" : " searches") + " now, then about " +
+    perMonth + " a month for all " + (tracking + adding) + " tracked flights";
+  if (searchesLeft != null) text += " (" + searchesLeft + " left this month)";
+  document.getElementById("budget").textContent = text + ".";
+}
+
+tripType.addEventListener("change", updateDateRows);
+dateRows.addEventListener("change", updateDateRows);
+addDateButton.addEventListener("click", () => addDateRow().querySelector(".depart").focus());
+
+function resetForm() {
+  form.reset();
+  dateRows.replaceChildren();
+  addDateRow();
+}
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const error = document.getElementById("form-error");
   const button = document.getElementById("add-button");
+  const request = {
+    origin: form.origin.value,
+    destination: form.destination.value,
+    trip_type: tripType.value,
+    airlines: [...form.querySelectorAll("input[name=airline]:checked")].map((b) => b.value),
+    dates: [...dateRows.children].map((row) => ({
+      depart_date: row.querySelector(".depart").value,
+      return_date: row.querySelector(".return").value || null,
+    })),
+  };
   error.textContent = "";
   button.disabled = true;
-  button.textContent = "Checking price…";
+  button.textContent = request.dates.length > 1 ? "Checking " + request.dates.length + " prices…" : "Checking price…";
   try {
-    await api("/api/routes", {
-      method: "POST",
-      body: JSON.stringify(Object.fromEntries(new FormData(form))),
-    });
-    form.reset();
-    tripType.dispatchEvent(new Event("change"));
+    await api("/api/routes", { method: "POST", body: JSON.stringify(request) });
+    resetForm();
     await loadRoutes();
     loadUsage();
   } catch (err) {
@@ -85,6 +170,8 @@ form.addEventListener("submit", async (event) => {
     button.textContent = "Start tracking";
   }
 });
+
+addDateRow();
 
 async function removeRoute(route) {
   const name = route.origin + " → " + route.destination;
@@ -119,6 +206,7 @@ function routeCard(route) {
   const title = el("div");
   const heading = el("h2", null, route.origin + " → " + route.destination);
   heading.append(el("span", "tag", route.trip_type === "round_trip" ? "Round trip" : "One-way"));
+  if (route.airlines.length) heading.append(el("span", "tag", route.airlines.join(", ") + " only"));
   if (!route.active) heading.append(el("span", "tag", "Finished"));
   title.append(heading);
   let dates = "Departs " + longDate(route.depart_date);

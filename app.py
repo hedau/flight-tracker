@@ -52,6 +52,7 @@ STATIC_TYPES = {".html": "text/html", ".css": "text/css", ".js": "text/javascrip
 MAX_BODY_BYTES = 2000
 SESSION_DAYS = 30
 AIRPORT_CODE = re.compile(r"^[A-Z]{3}$")
+MAX_DATES = 5  # date pairs per "Start tracking" click; each uses 1 search a day
 
 # Signing key for login cookies. It is derived from the password, so
 # changing the password logs everyone out.
@@ -88,13 +89,16 @@ def too_many_failed_logins():
 
 # --- Checking what the user typed ---------------------------------------------------
 
-def parse_route(data):
-    """Turn the add-route form into clean values, or raise ValueError."""
+def parse_routes(data):
+    """Turn the add-route form into a list of routes to save, or raise ValueError.
+
+    The form can hold several date pairs; each one becomes its own route.
+    """
     origin = str(data.get("origin", "")).strip().upper()
     destination = str(data.get("destination", "")).strip().upper()
     trip_type = data.get("trip_type")
-    depart = str(data.get("depart_date", ""))
-    back = str(data.get("return_date") or "")
+    airlines = data.get("airlines") or []
+    dates = data.get("dates")
 
     if not AIRPORT_CODE.match(origin) or not AIRPORT_CODE.match(destination):
         raise ValueError("Use 3-letter airport codes, like JFK or LAX.")
@@ -102,16 +106,35 @@ def parse_route(data):
         raise ValueError("From and To must be different airports.")
     if trip_type not in ("one_way", "round_trip"):
         raise ValueError("Choose one-way or round trip.")
-    try:
-        depart_day = datetime.date.fromisoformat(depart)
-        back_day = datetime.date.fromisoformat(back) if trip_type == "round_trip" else None
-    except ValueError:
+    if not isinstance(airlines, list) or not all(a in prices.AIRLINES for a in airlines):
+        raise ValueError("Choose airlines from the list.")
+    if not isinstance(dates, list) or not dates:
         raise ValueError("Pick the travel date(s).")
-    if depart < prices.today_eastern():
-        raise ValueError("The departure date is in the past.")
-    if back_day and back_day < depart_day:
-        raise ValueError("The return date must be on or after the departure date.")
-    return origin, destination, trip_type, depart, back or None
+    if len(dates) > MAX_DATES:
+        raise ValueError("You can add up to %d dates at a time." % MAX_DATES)
+
+    # Keep the airlines in the list's order so "DL,UA" and "UA,DL" are the same.
+    airline_codes = ",".join(code for code in prices.AIRLINES if code in airlines) or None
+    routes, seen = [], set()
+    for pair in dates:
+        if not isinstance(pair, dict):
+            raise ValueError("Pick the travel date(s).")
+        depart = str(pair.get("depart_date") or "")
+        back = str(pair.get("return_date") or "") if trip_type == "round_trip" else ""
+        try:
+            depart_day = datetime.date.fromisoformat(depart)
+            back_day = datetime.date.fromisoformat(back) if trip_type == "round_trip" else None
+        except ValueError:
+            raise ValueError("Pick the travel date(s) in every row.")
+        if depart < prices.today_eastern():
+            raise ValueError("The departure date %s is in the past." % depart)
+        if back_day and back_day < depart_day:
+            raise ValueError("A return date is before its departure date.")
+        if (depart, back) in seen:
+            raise ValueError("The same dates are listed twice.")
+        seen.add((depart, back))
+        routes.append((origin, destination, trip_type, depart, back or None, airline_codes))
+    return routes
 
 
 def route_summary(route):
@@ -124,6 +147,7 @@ def route_summary(route):
         "trip_type": route["trip_type"],
         "depart_date": route["depart_date"],
         "return_date": route["return_date"],
+        "airlines": [prices.AIRLINES.get(c, c) for c in (route["airlines"] or "").split(",") if c],
         "active": bool(route["active"]),
         "history": known,
         "last_error": history[-1]["error"] if history and history[-1]["price"] is None else None,
@@ -162,6 +186,8 @@ class Handler(BaseHTTPRequestHandler):
                 "today": prices.today_eastern(),
                 "currency": prices.CURRENCY,
                 "login_required": bool(PASSWORD),
+                "airlines": prices.AIRLINES,
+                "max_dates": MAX_DATES,
             })
         if path == "/api/usage":
             try:
@@ -231,16 +257,17 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(data, dict):
             return self.send_json({"error": "Invalid request."}, 400)
         try:
-            origin, destination, trip_type, depart, back = parse_route(data)
+            new_routes = parse_routes(data)
         except ValueError as err:
             return self.send_json({"error": str(err)}, 400)
-        route_id = db.add_route(
-            origin, destination, trip_type, depart, back,
-            prices.now_eastern().isoformat(timespec="seconds"),
-        )
-        # Get the first price straight away so the chart isn't empty until tomorrow.
-        prices.check_route(db.get_route(route_id))
-        self.send_json({"route": route_summary(db.get_route(route_id))})
+        created_at = prices.now_eastern().isoformat(timespec="seconds")
+        saved = []
+        for route in new_routes:
+            route_id = db.add_route(*route, created_at)
+            # Get the first price straight away so the chart isn't empty until tomorrow.
+            prices.check_route(db.get_route(route_id))
+            saved.append(route_summary(db.get_route(route_id)))
+        self.send_json({"routes": saved})
 
     def handle_scheduled_check(self):
         sent = self.headers.get("Authorization", "")

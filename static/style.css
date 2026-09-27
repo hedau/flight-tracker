@@ -61,7 +61,17 @@ header .right { display: flex; align-items: center; gap: 12px; }
 .banner { background: var(--warn-bg); color: var(--warn-text); border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; }
 
 /* Add-route form */
-form.add { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; align-items: end; }
+.add { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; align-items: end; }
+fieldset { border: 0; padding: 0; margin: 16px 0 0; min-width: 0; }
+legend { font-size: 13px; color: var(--text-2); padding: 0; margin-bottom: 6px; }
+.airlines { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { flex-direction: row; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 999px; color: var(--text); cursor: pointer; font-size: 14px; }
+.chip:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.chip input { margin: 0; accent-color: var(--accent); }
+.date-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 8px; }
+.date-row label { flex: 0 1 200px; min-width: 140px; }
+.date-row .remove-date { flex: 0 0 auto; }
+.submit-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 16px; }
 label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-2); }
 input, select, button { font: inherit; }
 input, select {

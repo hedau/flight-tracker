@@ -22,6 +22,18 @@ CURRENCY = "USD"
 TIMEZONE = ZoneInfo("America/New_York")
 MORNING_HOUR = 7  # the scheduled check runs from 7 AM Eastern Time
 
+# Airlines you can tick on the dashboard, by their official 2-letter code.
+AIRLINES = {
+    "AA": "American",
+    "DL": "Delta",
+    "UA": "United",
+    "WN": "Southwest",
+    "B6": "JetBlue",
+    "AS": "Alaska",
+    "NK": "Spirit",
+    "F9": "Frontier",
+}
+
 
 def demo_mode():
     return not SERPAPI_KEY
@@ -57,6 +69,8 @@ def serpapi_price(route):
     }
     if route["trip_type"] == "round_trip":
         params["return_date"] = route["return_date"]
+    if route.get("airlines"):
+        params["include_airlines"] = route["airlines"]  # e.g. "DL,UA"
     data = _get_json("https://serpapi.com/search.json?" + urllib.parse.urlencode(params))
     if data.get("error"):
         raise RuntimeError(data["error"])
@@ -71,17 +85,20 @@ def serpapi_price(route):
     lowest = (data.get("price_insights") or {}).get("lowest_price")
     if lowest:
         return int(lowest), None
+    if route.get("airlines"):
+        raise RuntimeError("No flights found on the chosen airlines for this route and date")
     raise RuntimeError("No flights found for this route and date")
 
 
 def demo_price(route):
     """A made-up price that drifts a little from day to day."""
-    key = "{origin}-{destination}-{trip_type}-{depart_date}".format(**route)
+    key = "{origin}-{destination}-{trip_type}-{depart_date}-{return_date}-{airlines}".format(**route)
     base = 150 + int(hashlib.sha256(key.encode()).hexdigest(), 16) % 500
     if route["trip_type"] == "round_trip":
         base = int(base * 1.8)
     rng = random.Random(key + today_eastern())
-    airline = rng.choice(["Delta", "United", "American", "JetBlue", "Alaska"])
+    codes = route["airlines"].split(",") if route.get("airlines") else list(AIRLINES)
+    airline = AIRLINES[rng.choice(codes)]
     return int(base * rng.uniform(0.85, 1.2)), airline
 
 
