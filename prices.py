@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -21,9 +22,11 @@ SERPAPI_KEY = os.environ.get("SERPAPI_KEY", "")
 CURRENCY = "USD"
 TIMEZONE = ZoneInfo("America/New_York")
 MORNING_HOUR = 7  # the scheduled check runs from 7 AM Eastern Time
+AIRLINE_CODE = re.compile(r"^[A-Z0-9]{2}$")  # e.g. DL, B6
 
-# Airlines you can tick on the dashboard, by their official 2-letter code.
-AIRLINES = {
+# Names for common airline codes, used in demo mode and for routes saved
+# before airline names were stored.
+KNOWN_AIRLINES = {
     "AA": "American",
     "DL": "Delta",
     "UA": "United",
@@ -56,7 +59,8 @@ def fetch_price(route):
     return serpapi_price(route)
 
 
-def serpapi_price(route):
+def serpapi_search(route):
+    """All priced flight options Google Flights shows for a route and date."""
     params = {
         "engine": "google_flights",
         "departure_id": route["origin"],
@@ -74,9 +78,12 @@ def serpapi_price(route):
     data = _get_json("https://serpapi.com/search.json?" + urllib.parse.urlencode(params))
     if data.get("error"):
         raise RuntimeError(data["error"])
-
     flights = data.get("best_flights", []) + data.get("other_flights", [])
-    priced = [f for f in flights if isinstance(f.get("price"), (int, float))]
+    return [f for f in flights if isinstance(f.get("price"), (int, float))], data
+
+
+def serpapi_price(route):
+    priced, data = serpapi_search(route)
     if priced:
         cheapest = min(priced, key=lambda f: f["price"])
         legs = cheapest.get("flights") or [{}]
@@ -97,9 +104,41 @@ def demo_price(route):
     if route["trip_type"] == "round_trip":
         base = int(base * 1.8)
     rng = random.Random(key + today_eastern())
-    codes = route["airlines"].split(",") if route.get("airlines") else list(AIRLINES)
-    airline = AIRLINES[rng.choice(codes)]
+    codes = route["airlines"].split(",") if route.get("airlines") else list(KNOWN_AIRLINES)
+    airline = KNOWN_AIRLINES.get(rng.choice(codes), "Demo Air")
     return int(base * rng.uniform(0.85, 1.2)), airline
+
+
+# --- Which airlines fly a route --------------------------------------------------
+
+def airlines_on_route(route):
+    """List the airlines flying a route on its date, cheapest first.
+
+    Returns [{"code": "DL", "name": "Delta", "price": 189}, ...]. Uses one search.
+    """
+    if demo_mode():
+        return demo_airlines(route)
+    priced, _ = serpapi_search(route)
+    found = {}
+    for option in priced:
+        for leg in option.get("flights") or []:
+            # Flight numbers look like "DL 408"; the first part is the airline code.
+            code = (leg.get("flight_number") or "").split(" ")[0].upper()
+            if not AIRLINE_CODE.match(code):
+                continue
+            price = int(round(option["price"]))
+            if code not in found or price < found[code]["price"]:
+                found[code] = {"code": code, "name": leg.get("airline") or code, "price": price}
+    if not found:
+        raise RuntimeError("No flights found for this route and date")
+    return sorted(found.values(), key=lambda a: a["price"])
+
+
+def demo_airlines(route):
+    rng = random.Random("{origin}-{destination}-{depart_date}".format(**route))
+    codes = rng.sample(list(KNOWN_AIRLINES), 5)
+    airlines = [{"code": c, "name": KNOWN_AIRLINES[c], "price": rng.randint(150, 600)} for c in codes]
+    return sorted(airlines, key=lambda a: a["price"])
 
 
 def _get_json(url):

@@ -43,14 +43,19 @@
         </div>
 
         <fieldset>
-          <legend>Airlines <span class="muted small">(none ticked = any airline)</span></legend>
-          <div class="airlines" id="airlines"></div>
-        </fieldset>
-
-        <fieldset>
           <legend>Dates <span class="muted small">(each date is tracked separately)</span></legend>
           <div id="date-rows"></div>
           <button type="button" class="link" id="add-date">+ Add another date</button>
+        </fieldset>
+
+        <fieldset>
+          <legend>Airlines</legend>
+          <p class="muted small" id="airline-hint">Optional: after filling in the route and first date, see which airlines fly it (uses 1 search). Skip this to track any airline.</p>
+          <button type="button" class="secondary" id="find-airlines">Find airlines</button>
+          <div id="airline-list" hidden>
+            <label class="chip select-all"><input type="checkbox" id="select-all"> Select all</label>
+            <div class="airlines" id="airlines"></div>
+          </div>
         </fieldset>
 
         <div class="submit-row">

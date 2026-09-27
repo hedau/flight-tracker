@@ -92,6 +92,9 @@ button {
   cursor: pointer;
 }
 button:disabled { opacity: 0.6; cursor: wait; }
+button.secondary { background: none; color: var(--accent); border: 1px solid var(--accent); }
+.select-all { display: inline-flex; margin-bottom: 8px; font-weight: 600; }
+.chip .from { color: var(--text-2); font-size: 13px; font-variant-numeric: tabular-nums; }
 button.link { background: none; color: var(--text-2); padding: 4px 6px; text-decoration: underline; }
 .error { color: var(--bad); min-height: 1.3em; margin: 8px 0 0; }
 

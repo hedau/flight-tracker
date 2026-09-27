@@ -49,10 +49,11 @@ CRON_SECRET = os.environ.get("CRON_SECRET", "").strip()  # ignore stray spaces f
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 STATIC_TYPES = {".html": "text/html", ".css": "text/css", ".js": "text/javascript"}
-MAX_BODY_BYTES = 2000
+MAX_BODY_BYTES = 4000
 SESSION_DAYS = 30
 AIRPORT_CODE = re.compile(r"^[A-Z]{3}$")
 MAX_DATES = 5  # date pairs per "Start tracking" click; each uses 1 search a day
+MAX_AIRLINES = 20
 
 # Signing key for login cookies. It is derived from the password, so
 # changing the password logs everyone out.
@@ -106,15 +107,28 @@ def parse_routes(data):
         raise ValueError("From and To must be different airports.")
     if trip_type not in ("one_way", "round_trip"):
         raise ValueError("Choose one-way or round trip.")
-    if not isinstance(airlines, list) or not all(a in prices.AIRLINES for a in airlines):
+    if (
+        not isinstance(airlines, list)
+        or len(airlines) > MAX_AIRLINES
+        or not all(
+            isinstance(a, dict)
+            and prices.AIRLINE_CODE.match(str(a.get("code", "")))
+            and isinstance(a.get("name"), str)
+            and 0 < len(a["name"]) <= 60
+            for a in airlines
+        )
+    ):
         raise ValueError("Choose airlines from the list.")
     if not isinstance(dates, list) or not dates:
         raise ValueError("Pick the travel date(s).")
     if len(dates) > MAX_DATES:
         raise ValueError("You can add up to %d dates at a time." % MAX_DATES)
 
-    # Keep the airlines in the list's order so "DL,UA" and "UA,DL" are the same.
-    airline_codes = ",".join(code for code in prices.AIRLINES if code in airlines) or None
+    # Sorted, so "DL,UA" and "UA,DL" are the same. Commas separate the names,
+    # so they are removed from inside a name.
+    airlines = sorted({a["code"]: " ".join(a["name"].replace(",", " ").split()) for a in airlines}.items())
+    airline_codes = ",".join(code for code, _ in airlines) or None
+    airline_names = ",".join(name for _, name in airlines) or None
     routes, seen = [], set()
     for pair in dates:
         if not isinstance(pair, dict):
@@ -133,8 +147,15 @@ def parse_routes(data):
         if (depart, back) in seen:
             raise ValueError("The same dates are listed twice.")
         seen.add((depart, back))
-        routes.append((origin, destination, trip_type, depart, back or None, airline_codes))
+        routes.append((origin, destination, trip_type, depart, back or None, airline_codes, airline_names))
     return routes
+
+
+def airline_names(route):
+    if route["airline_names"]:
+        return route["airline_names"].split(",")
+    codes = [c for c in (route["airlines"] or "").split(",") if c]
+    return [prices.KNOWN_AIRLINES.get(c, c) for c in codes]
 
 
 def route_summary(route):
@@ -147,7 +168,7 @@ def route_summary(route):
         "trip_type": route["trip_type"],
         "depart_date": route["depart_date"],
         "return_date": route["return_date"],
-        "airlines": [prices.AIRLINES.get(c, c) for c in (route["airlines"] or "").split(",") if c],
+        "airlines": airline_names(route),
         "active": bool(route["active"]),
         "history": known,
         "last_error": history[-1]["error"] if history and history[-1]["price"] is None else None,
@@ -186,7 +207,6 @@ class Handler(BaseHTTPRequestHandler):
                 "today": prices.today_eastern(),
                 "currency": prices.CURRENCY,
                 "login_required": bool(PASSWORD),
-                "airlines": prices.AIRLINES,
                 "max_dates": MAX_DATES,
             })
         if path == "/api/usage":
@@ -216,6 +236,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/routes":
             return self.handle_add_route(body)
+        if path == "/api/airlines":
+            return self.handle_find_airlines(body)
         self.send_json({"error": "Not found"}, 404)
 
     def do_DELETE(self):
@@ -248,6 +270,28 @@ class Handler(BaseHTTPRequestHandler):
             failed_logins.append(time.time())
         time.sleep(1)
         self.redirect("/login?error=wrong")
+
+    def handle_find_airlines(self, body):
+        """List the airlines flying a route on its first date (uses 1 search)."""
+        try:
+            data = json.loads(body)
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            return self.send_json({"error": "Invalid request."}, 400)
+        try:
+            route = parse_routes(dict(data, airlines=[]))[0]
+        except ValueError as err:
+            return self.send_json({"error": str(err)}, 400)
+        origin, destination, trip_type, depart, back = route[:5]
+        try:
+            airlines = prices.airlines_on_route({
+                "origin": origin, "destination": destination, "trip_type": trip_type,
+                "depart_date": depart, "return_date": back, "airlines": None,
+            })
+        except RuntimeError as err:
+            return self.send_json({"error": str(err)}, 502)
+        self.send_json({"airlines": airlines})
 
     def handle_add_route(self, body):
         try:
@@ -321,6 +365,9 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     if IN_CLOUD and not PASSWORD:
         raise SystemExit("Set DASHBOARD_PASSWORD before running in the cloud.")
+    if db.using_postgres() and prices.demo_mode():
+        # Never mix made-up demo prices into the real price history.
+        raise SystemExit("SERPAPI_KEY is missing. Demo prices are only allowed without DATABASE_URL.")
     db.init()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     where = "cloud database" if db.using_postgres() else "local file " + db.SQLITE_PATH

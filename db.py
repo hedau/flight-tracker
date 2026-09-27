@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS routes (
     depart_date TEXT NOT NULL,
     return_date TEXT,
     airlines    TEXT,
+    airline_names TEXT,
     active      INTEGER NOT NULL DEFAULT 1,
     created_at  TEXT NOT NULL
 );
@@ -94,21 +95,24 @@ def init():
         for statement in SCHEMA.format(id_column=id_column).split(";"):
             if statement.strip():
                 conn.execute(statement)
-        # Databases created before the airline filter existed need the new column.
-        if using_postgres():
-            conn.execute("ALTER TABLE routes ADD COLUMN IF NOT EXISTS airlines TEXT")
-        elif "airlines" not in {c["name"] for c in conn.execute("PRAGMA table_info(routes)")}:
-            conn.execute("ALTER TABLE routes ADD COLUMN airlines TEXT")
+        # Databases created before these columns existed need them added.
+        for column in ("airlines", "airline_names"):
+            if using_postgres():
+                conn.execute("ALTER TABLE routes ADD COLUMN IF NOT EXISTS %s TEXT" % column)
+            elif column not in {c["name"] for c in conn.execute("PRAGMA table_info(routes)")}:
+                conn.execute("ALTER TABLE routes ADD COLUMN %s TEXT" % column)
 
 
 # --- Routes -----------------------------------------------------------------
 
-def add_route(origin, destination, trip_type, depart_date, return_date, airlines, created_at):
-    """airlines is a comma-separated list of airline codes like "DL,UA", or None for any."""
+def add_route(origin, destination, trip_type, depart_date, return_date,
+              airlines, airline_names, created_at):
+    """airlines is a comma-separated list of airline codes like "DL,UA", or None
+    for any airline; airline_names holds their names, like "Delta,United"."""
     row = execute(
-        "INSERT INTO routes (origin, destination, trip_type, depart_date, return_date, airlines, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
-        (origin, destination, trip_type, depart_date, return_date, airlines, created_at),
+        "INSERT INTO routes (origin, destination, trip_type, depart_date, return_date,"
+        " airlines, airline_names, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        (origin, destination, trip_type, depart_date, return_date, airlines, airline_names, created_at),
     )
     return row["id"]
 

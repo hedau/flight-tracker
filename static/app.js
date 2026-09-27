@@ -35,18 +35,19 @@ async function loadRoutes() {
   state = data;
   document.getElementById("demo-banner").hidden = !data.demo;
   document.getElementById("logout").hidden = !data.login_required;
-  buildAirlineChips();
   renderRoutes();
   updateBudget();
 }
 
 let searchesLeft = null;
+let searchesPerMonth = null;
 
 async function loadUsage() {
   try {
     const { usage } = await api("/api/usage");
     if (usage && usage.left != null) {
       searchesLeft = usage.left;
+      searchesPerMonth = usage.per_month;
       document.getElementById("usage").textContent =
         usage.left + " of " + usage.per_month + " searches left this month";
       updateBudget();
@@ -62,20 +63,6 @@ const form = document.getElementById("add-form");
 const tripType = document.getElementById("trip-type");
 const dateRows = document.getElementById("date-rows");
 const addDateButton = document.getElementById("add-date");
-
-function buildAirlineChips() {
-  const box = document.getElementById("airlines");
-  if (box.children.length) return; // already built
-  for (const [code, name] of Object.entries(state.airlines)) {
-    const chip = el("label", "chip");
-    const box_ = el("input");
-    box_.type = "checkbox";
-    box_.name = "airline";
-    box_.value = code;
-    chip.append(box_, document.createTextNode(name));
-    box.append(chip);
-  }
-}
 
 function addDateRow() {
   const row = el("div", "date-row");
@@ -128,7 +115,11 @@ function updateBudget() {
   let text = "Uses " + adding + (adding === 1 ? " search" : " searches") + " now, then about " +
     perMonth + " a month for all " + (tracking + adding) + " tracked flights";
   if (searchesLeft != null) text += " (" + searchesLeft + " left this month)";
-  document.getElementById("budget").textContent = text + ".";
+  text += ".";
+  if (searchesPerMonth && perMonth > searchesPerMonth) {
+    text += " ⚠️ That's more than your " + searchesPerMonth + " a month, so some checks would fail near the end of the month.";
+  }
+  document.getElementById("budget").textContent = text;
 }
 
 tripType.addEventListener("change", updateDateRows);
@@ -139,6 +130,109 @@ function resetForm() {
   form.reset();
   dateRows.replaceChildren();
   addDateRow();
+  clearAirlines();
+}
+
+// --- Finding the airlines that fly a route ---
+
+const findButton = document.getElementById("find-airlines");
+const airlineHint = document.getElementById("airline-hint");
+const airlineList = document.getElementById("airline-list");
+const airlineBoxes = document.getElementById("airlines");
+const selectAll = document.getElementById("select-all");
+const DEFAULT_HINT = airlineHint.textContent;
+
+function routeFromForm() {
+  const first = dateRows.children[0];
+  return {
+    origin: form.origin.value,
+    destination: form.destination.value,
+    trip_type: tripType.value,
+    dates: [{
+      depart_date: first.querySelector(".depart").value,
+      return_date: first.querySelector(".return").value || null,
+    }],
+  };
+}
+
+findButton.addEventListener("click", async () => {
+  const error = document.getElementById("form-error");
+  error.textContent = "";
+  findButton.disabled = true;
+  findButton.textContent = "Finding airlines…";
+  try {
+    const { airlines } = await api("/api/airlines", {
+      method: "POST",
+      body: JSON.stringify(routeFromForm()),
+    });
+    showAirlines(airlines);
+    loadUsage();
+  } catch (err) {
+    error.textContent = err.message;
+  } finally {
+    findButton.disabled = false;
+    findButton.textContent = "Find airlines";
+  }
+});
+
+function showAirlines(airlines) {
+  airlineBoxes.replaceChildren();
+  for (const airline of airlines) {
+    const chip = el("label", "chip");
+    const box = el("input");
+    box.type = "checkbox";
+    box.checked = true;
+    box.value = airline.code;
+    box.dataset.name = airline.name;
+    chip.append(box, document.createTextNode(airline.name), el("span", "from", "from " + money(airline.price)));
+    airlineBoxes.append(chip);
+  }
+  const route = routeFromForm();
+  airlineHint.textContent = airlines.length + " airlines fly " + route.origin.toUpperCase() + " → " +
+    route.destination.toUpperCase() + " on " + shortDate(route.dates[0].depart_date) +
+    ". Untick any you don't want. With all ticked, any airline counts.";
+  airlineList.hidden = false;
+  findButton.hidden = true;
+  updateSelectAll();
+}
+
+function clearAirlines(message) {
+  airlineBoxes.replaceChildren();
+  airlineList.hidden = true;
+  findButton.hidden = false;
+  airlineHint.textContent = message || DEFAULT_HINT;
+}
+
+function airlineCheckboxes() {
+  return [...airlineBoxes.querySelectorAll("input[type=checkbox]")];
+}
+
+function updateSelectAll() {
+  const boxes = airlineCheckboxes();
+  const ticked = boxes.filter((b) => b.checked).length;
+  selectAll.checked = ticked === boxes.length;
+  selectAll.indeterminate = ticked > 0 && ticked < boxes.length;
+}
+
+selectAll.addEventListener("change", () => {
+  airlineCheckboxes().forEach((b) => (b.checked = selectAll.checked));
+  updateSelectAll();
+});
+airlineBoxes.addEventListener("change", updateSelectAll);
+
+// A different route has different airlines, so the list must be found again.
+for (const field of [form.origin, form.destination, tripType]) {
+  field.addEventListener("change", () => {
+    if (!airlineList.hidden) clearAirlines("The route changed, so find its airlines again (or skip to track any airline).");
+  });
+}
+
+// Which airlines to send: [] means any airline.
+function chosenAirlines() {
+  const boxes = airlineCheckboxes();
+  const ticked = boxes.filter((b) => b.checked);
+  if (ticked.length === boxes.length) return [];
+  return ticked.map((b) => ({ code: b.value, name: b.dataset.name }));
 }
 
 form.addEventListener("submit", async (event) => {
@@ -149,12 +243,16 @@ form.addEventListener("submit", async (event) => {
     origin: form.origin.value,
     destination: form.destination.value,
     trip_type: tripType.value,
-    airlines: [...form.querySelectorAll("input[name=airline]:checked")].map((b) => b.value),
+    airlines: chosenAirlines(),
     dates: [...dateRows.children].map((row) => ({
       depart_date: row.querySelector(".depart").value,
       return_date: row.querySelector(".return").value || null,
     })),
   };
+  if (!airlineList.hidden && !airlineCheckboxes().some((b) => b.checked)) {
+    error.textContent = "Tick at least one airline, or tick \u201cSelect all\u201d.";
+    return;
+  }
   error.textContent = "";
   button.disabled = true;
   button.textContent = request.dates.length > 1 ? "Checking " + request.dates.length + " prices…" : "Checking price…";
