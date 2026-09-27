@@ -22,6 +22,15 @@ Then open http://localhost:8000. With no settings, it uses demo prices, saves to
 To use real prices or a password, copy `.env.example` to `.env` and fill it in.
 `.env` holds your secrets and is never uploaded to GitHub.
 
+Using the Neon database from your Mac needs the `psycopg` package, installed in a
+private virtual environment:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python app.py
+```
+
 ## How it works
 
 ```
