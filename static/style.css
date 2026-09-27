@@ -263,3 +263,87 @@ details.airline-tag summary::-webkit-details-marker { display: none; }
 .login input { padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--text); }
 .login button { background: var(--accent); color: var(--accent-text); font-weight: 600; padding: 10px; }
 .login .error { min-height: 1.3em; }
+
+/* =====================================================================
+   Colour: sky-themed page, gradient header, and a colour for each trip
+   ===================================================================== */
+:root {
+  --bg: #eef3fb;
+  --page: linear-gradient(180deg, #e6f0ff 0%, #f3efff 45%, #fff3ec 100%);
+  --hero: linear-gradient(135deg, #2a78d6 0%, #5b4bd6 55%, #d9669b 100%);
+  --button: linear-gradient(135deg, #2a78d6, #5b4bd6);
+  --tile-bg: rgba(255, 255, 255, 0.94);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1324;
+    --surface: #151c30;
+    --surface-2: #1e2742;
+    --grid: #27314d;
+    --text-2: #b9c0d4;
+    --muted: #8a93ab;
+    --border: rgba(255, 255, 255, 0.08);
+    --page: linear-gradient(180deg, #0b1226 0%, #141537 50%, #1c1330 100%);
+    --hero: linear-gradient(135deg, #1f5fb0 0%, #4535b0 55%, #a8487a 100%);
+    --button: linear-gradient(135deg, #3987e5, #6a5ae0);
+    --tile-bg: rgba(21, 28, 48, 0.88);
+  }
+}
+body { background: var(--page) fixed, var(--bg); min-height: 100vh; }
+.topbar { background: color-mix(in srgb, var(--surface) 80%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.primary { background: var(--button); box-shadow: 0 4px 14px rgba(58, 90, 214, 0.28); }
+.primary:hover { filter: brightness(1.07); }
+
+/* Header */
+.hero {
+  position: relative; overflow: hidden; border-radius: 22px; padding: 26px 22px 22px; margin-bottom: 26px;
+  background: var(--hero); color: #fff; box-shadow: 0 10px 30px rgba(62, 76, 190, 0.25);
+}
+.hero::before, .hero::after { content: ""; position: absolute; border-radius: 50%; pointer-events: none; }
+.hero::before { width: 320px; height: 320px; right: -80px; top: -140px; background: radial-gradient(circle, rgba(255, 255, 255, 0.28), transparent 70%); }
+.hero::after { width: 240px; height: 240px; left: -60px; bottom: -150px; background: radial-gradient(circle, rgba(255, 214, 170, 0.35), transparent 70%); }
+.hero-text { position: relative; margin-bottom: 18px; }
+.hero-text::after { content: "✈"; position: absolute; right: 6px; top: -8px; font-size: 44px; opacity: 0.35; transform: rotate(-12deg); }
+.hero-greeting { font-size: 14px; font-weight: 600; opacity: 0.9; }
+.hero-title { font-size: 24px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.2; max-width: 80%; }
+.hero .summary { position: relative; margin-bottom: 0; }
+.hero .tile { background: var(--tile-bg); border: 0; color: var(--text); box-shadow: 0 4px 16px rgba(20, 20, 60, 0.12); }
+.tile-icon {
+  float: right; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; font-size: 17px; margin-left: 8px;
+}
+.t-blue { background: rgba(42, 120, 214, 0.15); }
+.t-green { background: rgba(10, 125, 51, 0.14); }
+.t-orange { background: rgba(235, 104, 52, 0.16); }
+.t-violet { background: rgba(91, 75, 214, 0.16); }
+@media (max-width: 760px) { .hero-title { font-size: 20px; max-width: 100%; } .hero-text::after { display: none; } }
+
+/* Each trip has its own colour (blue, violet, teal, orange, pink) */
+.trip { position: relative; overflow: hidden; }
+.trip::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 5px; background: linear-gradient(90deg, var(--series), color-mix(in srgb, var(--series) 35%, #ffffff)); }
+.trip { --series-soft: color-mix(in srgb, var(--series) 13%, transparent); }
+.trip .trip-title .arrow { color: var(--series); font-weight: 700; }
+.trip .chart .band { fill: var(--series-soft); }
+.trip .key-band { background: var(--series-soft); }
+.trip .date-table tr.selected td { background: var(--series-soft); }
+.trip .date-table tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--series); }
+.trip .range-typical { background: var(--series-soft); box-shadow: inset 0 0 0 1px var(--series); }
+.trip .hero-price { background: linear-gradient(90deg, var(--text), color-mix(in srgb, var(--series) 70%, var(--text))); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+.trip .hero-price .level { -webkit-text-fill-color: initial; }
+
+.accent-0 { --series: #2a78d6; }
+.accent-1 { --series: #4a3aa7; }
+.accent-2 { --series: #1baf7a; }
+.accent-3 { --series: #eb6834; }
+.accent-4 { --series: #e87ba4; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .accent-0 { --series: #3987e5; }
+  :root:not([data-theme="light"]) .accent-1 { --series: #9085e9; }
+  :root:not([data-theme="light"]) .accent-2 { --series: #199e70; }
+  :root:not([data-theme="light"]) .accent-3 { --series: #d95926; }
+  :root:not([data-theme="light"]) .accent-4 { --series: #d55181; }
+}
+
+.section-head h1 { font-size: 22px; }
+.form-panel { position: relative; overflow: hidden; }
+.form-panel::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 5px; background: var(--button); }
+.trip .range-view { background: color-mix(in srgb, var(--series) 7%, var(--surface-2)); }

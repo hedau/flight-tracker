@@ -152,6 +152,7 @@ function renderSummary() {
   }
 
   renderCountdown();
+  renderGreeting();
 
   const searches = document.getElementById("sum-searches");
   const meter = document.getElementById("sum-meter");
@@ -166,6 +167,12 @@ function renderSummary() {
     meter.style.width = Math.max(0, Math.min(100, (usage.left / usage.per_month) * 100)) + "%";
     meter.classList.toggle("low", usage.left < usage.per_month * 0.2);
   }
+}
+
+function renderGreeting() {
+  const hour = new Date().getHours();
+  const part = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  document.getElementById("greeting").textContent = part + " ✈️";
 }
 
 function renderCountdown() {
@@ -198,9 +205,16 @@ function renderTrips() {
   for (const trip of trips) container.append(tripCard(trip));
 }
 
+// Each trip keeps the same colour, based on its route (not its position).
+function tripColour(key) {
+  let hash = 0;
+  for (const ch of key) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  return "accent-" + (hash % 5);
+}
+
 function tripCard(trip) {
   const first = trip.dates[0];
-  const card = el("section", "panel trip");
+  const card = el("section", "panel trip " + tripColour(trip.key));
 
   // Heading: ATL → BOM, city names, and tags
   const head = el("div", "trip-head");

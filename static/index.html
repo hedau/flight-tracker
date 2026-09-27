@@ -25,14 +25,20 @@
       <strong>Demo mode:</strong> prices are made up. Add a SerpApi key to get real Google Flights prices.
     </div>
 
-    <!-- Summary tiles -->
-    <section class="summary" id="summary" aria-label="Summary">
-      <div class="tile"><div class="tile-label">Tracking</div><div class="tile-value" id="sum-tracking">–</div><div class="tile-sub" id="sum-tracking-sub"></div></div>
-      <div class="tile"><div class="tile-label">Best deal now</div><div class="tile-value" id="sum-best">–</div><div class="tile-sub" id="sum-best-sub"></div></div>
-      <div class="tile"><div class="tile-label">Next price check</div><div class="tile-value" id="sum-next">–</div><div class="tile-sub" id="sum-next-sub">Every day at 7:00 AM Eastern</div></div>
-      <div class="tile"><div class="tile-label">Searches left</div><div class="tile-value" id="sum-searches">–</div>
+    <!-- Colourful header with the summary tiles -->
+    <section class="hero" aria-label="Summary">
+      <div class="hero-text">
+        <div class="hero-greeting" id="greeting">Hello!</div>
+        <div class="hero-title">Here's how your flight prices look today</div>
+      </div>
+      <div class="summary" id="summary">
+      <div class="tile"><span class="tile-icon t-blue" aria-hidden="true">🧳</span><div class="tile-label">Tracking</div><div class="tile-value" id="sum-tracking">–</div><div class="tile-sub" id="sum-tracking-sub"></div></div>
+      <div class="tile"><span class="tile-icon t-green" aria-hidden="true">💰</span><div class="tile-label">Best deal now</div><div class="tile-value" id="sum-best">–</div><div class="tile-sub" id="sum-best-sub"></div></div>
+      <div class="tile"><span class="tile-icon t-orange" aria-hidden="true">⏰</span><div class="tile-label">Next price check</div><div class="tile-value" id="sum-next">–</div><div class="tile-sub" id="sum-next-sub">Every day at 7:00 AM Eastern</div></div>
+      <div class="tile"><span class="tile-icon t-violet" aria-hidden="true">🔎</span><div class="tile-label">Searches left</div><div class="tile-value" id="sum-searches">–</div>
         <div class="meter" aria-hidden="true"><div class="meter-fill" id="sum-meter"></div></div>
         <div class="tile-sub" id="sum-searches-sub"></div></div>
+      </div>
     </section>
 
     <div class="section-head">
