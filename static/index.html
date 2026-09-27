@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Flight Tracker</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>✈️ Flight Tracker</h1>
+        <div class="muted small">Prices are checked every day at 7:00 AM Eastern Time.</div>
+      </div>
+      <div class="right">
+        <span class="muted small" id="usage"></span>
+        <form method="post" action="/logout" id="logout" hidden><button class="link" type="submit">Log out</button></form>
+      </div>
+    </header>
+
+    <div class="banner" id="demo-banner" hidden>
+      <strong>Demo mode:</strong> these prices are made up. Add a SerpApi key to get real Google Flights prices.
+    </div>
+
+    <section class="panel">
+      <h2>Track a new flight</h2>
+      <p class="muted small">Use 3-letter airport codes, like JFK (New York), LAX (Los Angeles) or BOM (Mumbai).</p>
+      <form class="add" id="add-form">
+        <label>From
+          <input class="code" name="origin" maxlength="3" placeholder="JFK" required>
+        </label>
+        <label>To
+          <input class="code" name="destination" maxlength="3" placeholder="LAX" required>
+        </label>
+        <label>Trip
+          <select name="trip_type" id="trip-type">
+            <option value="one_way">One-way</option>
+            <option value="round_trip">Round trip</option>
+          </select>
+        </label>
+        <label>Depart
+          <input type="date" name="depart_date" required>
+        </label>
+        <label id="return-field" hidden>Return
+          <input type="date" name="return_date">
+        </label>
+        <button type="submit" id="add-button">Start tracking</button>
+      </form>
+      <p class="error" id="form-error" role="alert"></p>
+    </section>
+
+    <div id="routes"></div>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+# The morning alarm: wakes the app and asks it to check all prices.
+#
+# GitHub's schedule uses UTC time and ignores daylight saving, so it fires at
+# both 11:00 and 12:00 UTC. The app only checks once it is 7 AM Eastern and
+# skips routes already checked today, so exactly one check happens each day.
+#
+# Needs two repository secrets (Settings > Secrets and variables > Actions):
+#   APP_URL      e.g. https://flight-tracker-abcd.onrender.com
+#   CRON_SECRET  the same value as CRON_SECRET on Render
+
+name: Morning price check
+
+on:
+  schedule:
+    - cron: "0 11 * * *"
+    - cron: "0 12 * * *"
+  workflow_dispatch: # adds a "Run workflow" button for testing
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake the app and check prices
+        run: |
+          # The free Render plan sleeps, so the first try can take a minute.
+          curl --fail-with-body --silent --show-error \
+            --retry 5 --retry-delay 20 --retry-all-errors --max-time 180 \
+            -X POST -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.APP_URL }}/api/check?scheduled=${{ github.event_name == 'schedule' && '1' || '0' }}"

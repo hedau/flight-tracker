@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Flight Tracker</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="login">
+    <div class="panel">
+      <h1>✈️ Flight Tracker</h1>
+      <p class="muted">Enter your password to see your tracked flights.</p>
+      <form method="post" action="/login">
+        <label>Password
+          <input type="password" name="password" autocomplete="current-password" required autofocus>
+        </label>
+        <button type="submit">Log in</button>
+        <p class="error" id="error"></p>
+      </form>
+    </div>
+  </main>
+  <script>
+    const reason = new URLSearchParams(location.search).get("error");
+    const messages = {
+      wrong: "Wrong password. Try again.",
+      wait: "Too many wrong tries. Please wait 15 minutes.",
+    };
+    document.getElementById("error").textContent = messages[reason] || "";
+  </script>
+</body>
+</html>
