@@ -1,26 +1,61 @@
-// Dashboard: loads your routes, draws a price chart for each, and handles the form.
+// Flight Tracker dashboard: summary tiles, trip cards with charts, and the add-flight form.
 
 const SVG_NS = "http://www.w3.org/2000/svg";
-const CHART_HEIGHT = 220;
-const PAD = { top: 16, right: 64, bottom: 26, left: 52 };
+const DAY_MS = 86400000;
+
+// ---------------------------------------------------------------------------------
+// Small helpers
+// ---------------------------------------------------------------------------------
 
 const money = (n) => "$" + Math.round(n).toLocaleString("en-US");
-const shortDate = (iso) =>
-  new Date(iso + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+const toDate = (iso) => new Date(iso + "T12:00:00");
+const shortDate = (iso) => toDate(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 const longDate = (iso) =>
-  new Date(iso + "T12:00:00").toLocaleDateString("en-US", {
-    weekday: "short", month: "short", day: "numeric", year: "numeric",
-  });
+  toDate(iso).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+const daysBetween = (a, b) => Math.round((toDate(b) - toDate(a)) / DAY_MS);
+const addDays = (iso, n) => new Date(toDate(iso).getTime() + n * DAY_MS).toISOString().slice(0, 10);
 
-let state = { routes: [], today: null };
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
+}
 
-// --- Talking to the server --------------------------------------------------------
+function svg(tag, attrs, parent) {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, v);
+  if (parent) parent.append(node);
+  return node;
+}
+
+function cityOf(code) {
+  return (AIRPORT_BY_CODE[code] || {}).city || null;
+}
+
+function showToast(message) {
+  const toast = document.getElementById("toast");
+  toast.textContent = message;
+  toast.hidden = false;
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => (toast.hidden = true), 4000);
+}
+
+// Google's rating for a price: low / typical / high, shown with an icon and words.
+function levelBadge(level) {
+  const labels = { low: "✓ Low price", typical: "● Typical price", high: "▲ High price" };
+  if (!labels[level]) return null;
+  return el("span", "level " + level, labels[level]);
+}
+
+const capitalise = (word) => word[0].toUpperCase() + word.slice(1);
+
+// ---------------------------------------------------------------------------------
+// Talking to the server
+// ---------------------------------------------------------------------------------
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: { "Content-Type": "application/json" },
-  });
+  const response = await fetch(path, { ...options, headers: { "Content-Type": "application/json" } });
   if (response.status === 401) {
     location.href = "/login";
     throw new Error("Please log in.");
@@ -30,56 +65,682 @@ async function api(path, options = {}) {
   return data;
 }
 
+let state = { routes: [], today: null, next_check: null, max_dates: 5 };
+let usage = null;             // { used, left, per_month } from SerpApi
+const selectedDate = {};      // trip key -> route id shown in its chart
+const chartRange = {};        // route id -> "14" | "30" | "all"
+
 async function loadRoutes() {
-  const data = await api("/api/routes");
-  state = data;
-  document.getElementById("demo-banner").hidden = !data.demo;
-  document.getElementById("logout").hidden = !data.login_required;
-  renderRoutes();
+  state = await api("/api/routes");
+  document.getElementById("demo-banner").hidden = !state.demo;
+  document.getElementById("logout").hidden = !state.login_required;
+  renderSummary();
+  renderTrips();
   updateBudget();
 }
 
-let searchesLeft = null;
-let searchesPerMonth = null;
-
 async function loadUsage() {
   try {
-    const { usage } = await api("/api/usage");
-    if (usage && usage.left != null) {
-      searchesLeft = usage.left;
-      searchesPerMonth = usage.per_month;
-      document.getElementById("usage").textContent =
-        usage.left + " of " + usage.per_month + " searches left this month";
-      updateBudget();
-    }
+    usage = (await api("/api/usage")).usage;
   } catch (err) {
-    // Not important enough to show an error for.
+    usage = null;
+  }
+  renderSummary();
+  updateBudget();
+}
+
+// ---------------------------------------------------------------------------------
+// Grouping: several dates of the same trip share one card
+// ---------------------------------------------------------------------------------
+
+function tripKey(route) {
+  return [route.origin, route.destination, route.trip_type, route.airlines.join("|")].join("/");
+}
+
+function groupTrips(routes) {
+  const groups = new Map();
+  for (const route of routes) {
+    const key = tripKey(route);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(route);
+  }
+  const list = [...groups.entries()].map(([key, dates]) => ({
+    key,
+    dates: dates.sort((a, b) => a.depart_date.localeCompare(b.depart_date)),
+    active: dates.some((d) => d.active),
+  }));
+  // Active trips first, then by the soonest departure.
+  return list.sort((a, b) => (b.active - a.active) || a.dates[0].depart_date.localeCompare(b.dates[0].depart_date));
+}
+
+const latest = (route) => route.history[route.history.length - 1] || null;
+
+// How far a price is below (-) or above (+) the middle of Google's typical range.
+function vsTypical(point) {
+  if (!point || point.typical_low == null || point.typical_high == null) return null;
+  const mid = (point.typical_low + point.typical_high) / 2;
+  return (point.price - mid) / mid;
+}
+
+// ---------------------------------------------------------------------------------
+// Summary tiles
+// ---------------------------------------------------------------------------------
+
+function renderSummary() {
+  const active = state.routes.filter((r) => r.active);
+  const trips = groupTrips(active);
+  document.getElementById("sum-tracking").textContent = trips.length + (trips.length === 1 ? " trip" : " trips");
+  document.getElementById("sum-tracking-sub").textContent =
+    active.length + (active.length === 1 ? " date" : " dates") + " checked daily";
+
+  // Best deal: the price furthest below Google's typical range, else the cheapest.
+  const priced = active.filter(latest);
+  const rated = priced.filter((r) => vsTypical(latest(r)) != null);
+  let best = null;
+  if (rated.length) best = rated.reduce((a, b) => (vsTypical(latest(b)) < vsTypical(latest(a)) ? b : a));
+  else if (priced.length) best = priced.reduce((a, b) => (latest(b).price < latest(a).price ? b : a));
+  const bestValue = document.getElementById("sum-best");
+  const bestSub = document.getElementById("sum-best-sub");
+  if (best) {
+    const point = latest(best);
+    bestValue.textContent = money(point.price);
+    const level = point.price_level ? " · " + capitalise(point.price_level) : "";
+    bestSub.textContent = best.origin + " → " + best.destination + " · " + shortDate(best.depart_date) + level;
+  } else {
+    bestValue.textContent = "–";
+    bestSub.textContent = "No prices yet";
+  }
+
+  renderCountdown();
+
+  const searches = document.getElementById("sum-searches");
+  const meter = document.getElementById("sum-meter");
+  const searchesSub = document.getElementById("sum-searches-sub");
+  if (state.demo) {
+    searches.textContent = "Demo";
+    searchesSub.textContent = "No searches used";
+    meter.style.width = "100%";
+  } else if (usage && usage.left != null) {
+    searches.textContent = usage.left.toLocaleString("en-US");
+    searchesSub.textContent = "of " + usage.per_month + " this month · ~" + active.length * 30 + " needed";
+    meter.style.width = Math.max(0, Math.min(100, (usage.left / usage.per_month) * 100)) + "%";
+    meter.classList.toggle("low", usage.left < usage.per_month * 0.2);
   }
 }
 
-// --- Add-route form -----------------------------------------------------------------
+function renderCountdown() {
+  if (!state.next_check) return;
+  const minutes = Math.max(0, Math.round((new Date(state.next_check) - Date.now()) / 60000));
+  const hours = Math.floor(minutes / 60);
+  document.getElementById("sum-next").textContent = hours ? "in " + hours + "h " + (minutes % 60) + "m" : "in " + minutes + "m";
+}
+setInterval(renderCountdown, 30000);
+
+// ---------------------------------------------------------------------------------
+// Trip cards
+// ---------------------------------------------------------------------------------
+
+function renderTrips() {
+  const container = document.getElementById("trips");
+  container.replaceChildren();
+  const trips = groupTrips(state.routes);
+  if (!trips.length) {
+    const empty = el("section", "panel empty");
+    empty.append(el("div", "empty-icon", "🛫"), el("h2", null, "No flights tracked yet"));
+    empty.append(el("p", null, "Add a route and your dates. Every morning at 7 AM Eastern the price is checked and saved, so you can see the best time to book."));
+    const button = el("button", "primary", "+ Track your first flight");
+    button.type = "button";
+    button.addEventListener("click", openForm);
+    empty.append(button);
+    container.append(empty);
+    return;
+  }
+  for (const trip of trips) container.append(tripCard(trip));
+}
+
+function tripCard(trip) {
+  const first = trip.dates[0];
+  const card = el("section", "panel trip");
+
+  // Heading: ATL → BOM, city names, and tags
+  const head = el("div", "trip-head");
+  const titleBox = el("div");
+  const title = el("div", "trip-title");
+  title.append(first.origin, el("span", "arrow", "→"), first.destination);
+  titleBox.append(title);
+  const fromCity = cityOf(first.origin);
+  const toCity = cityOf(first.destination);
+  if (fromCity || toCity) titleBox.append(el("div", "trip-cities", (fromCity || first.origin) + " to " + (toCity || first.destination)));
+
+  const tags = el("div", "tags");
+  tags.append(el("span", "tag", first.trip_type === "round_trip" ? "Round trip" : "One-way"));
+  if (first.airlines.length === 1) {
+    tags.append(el("span", "tag", first.airlines[0] + " only"));
+  } else if (first.airlines.length > 1) {
+    const details = el("details", "airline-tag");
+    details.append(el("summary", "tag", first.airlines.length + " airlines ▾"));
+    details.append(el("div", "airline-names", first.airlines.join(" · ")));
+    tags.append(details);
+  } else {
+    tags.append(el("span", "tag", "Any airline"));
+  }
+  if (!trip.active) tags.append(el("span", "tag", "Finished"));
+  titleBox.append(tags);
+  head.append(titleBox);
+  card.append(head);
+
+  // Which date is shown in detail (the cheapest, until you pick another)
+  let chosen = trip.dates.find((d) => d.id === selectedDate[trip.key]) || cheapestDate(trip) || first;
+  selectedDate[trip.key] = chosen.id;
+
+  const detailBox = el("div");
+  const showDetail = () => detailBox.replaceChildren(dateDetail(chosen, trip));
+
+  if (trip.dates.length > 1) {
+    card.append(dateTable(trip, chosen, (route) => {
+      chosen = route;
+      selectedDate[trip.key] = route.id;
+      card.querySelectorAll(".date-table tbody tr").forEach((tr) => tr.classList.toggle("selected", tr.dataset.id === String(route.id)));
+      showDetail();
+    }));
+  }
+  card.append(detailBox);
+  showDetail();
+  return card;
+}
+
+function cheapestDate(trip) {
+  const priced = trip.dates.filter((d) => d.active && latest(d));
+  if (!priced.length) return null;
+  return priced.reduce((a, b) => (latest(b).price < latest(a).price ? b : a));
+}
+
+function tripDates(route) {
+  return route.return_date ? shortDate(route.depart_date) + " – " + shortDate(route.return_date) : shortDate(route.depart_date);
+}
+
+function dateTable(trip, chosen, onSelect) {
+  const cheapest = cheapestDate(trip);
+  const table = el("table", "date-table");
+  const head = el("tr");
+  [["Dates"], ["Price"], ["Change", "hide-sm"], ["Trend"]].forEach(([h, cls]) => head.append(el("th", cls, h)));
+  const thead = el("thead");
+  thead.append(head);
+  table.append(thead);
+  const body = el("tbody");
+  for (const route of trip.dates) {
+    const row = el("tr", route.id === chosen.id ? "selected" : "");
+    row.dataset.id = route.id;
+    row.tabIndex = 0;
+    row.setAttribute("aria-label", "Show " + tripDates(route));
+
+    const dates = el("td");
+    dates.append(tripDates(route));
+    if (cheapest && route.id === cheapest.id) dates.append(el("span", "best", "CHEAPEST"));
+    if (!route.active) dates.append(el("span", "best", "FINISHED"));
+
+    const point = latest(route);
+    const price = el("td", "price-cell", point ? money(point.price) : "–");
+    const change = el("td", "hide-sm");
+    if (route.history.length > 1) {
+      const diff = point.price - route.history[0].price;
+      change.textContent = diff === 0 ? "No change" : (diff < 0 ? "▼ " : "▲ ") + money(Math.abs(diff));
+      change.className = "hide-sm " + (diff < 0 ? "down" : diff > 0 ? "up" : "");
+    } else {
+      change.textContent = "New";
+      change.className = "hide-sm muted";
+    }
+    const trend = el("td", "spark-cell");
+    trend.append(sparkline(route));
+
+    row.append(dates, price, change, trend);
+    row.addEventListener("click", () => onSelect(route));
+    row.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(route); }
+    });
+    body.append(row);
+  }
+  table.append(body);
+  return table;
+}
+
+function dateDetail(route, trip) {
+  const box = el("div", "detail");
+  const point = latest(route);
+
+  if (!point) {
+    box.append(el("p", "muted", route.last_error ? "Couldn't get a price: " + route.last_error : "Waiting for the first price."));
+    box.append(cardFoot(route, trip));
+    return box;
+  }
+
+  // Big price, Google's rating and key facts
+  const top = el("div", "detail-top");
+  const main = el("div");
+  const hero = el("div", "hero-price", money(point.price));
+  const badge = levelBadge(point.price_level);
+  if (badge) hero.append(badge);
+  main.append(hero);
+  const subParts = [tripDates(route)];
+  if (point.airline) subParts.push(point.airline);
+  if (point.typical_low != null) subParts.push("Typical " + money(point.typical_low) + "–" + money(point.typical_high));
+  main.append(el("div", "hero-sub", subParts.join(" · ")));
+  top.append(main);
+
+  const facts = el("div", "facts");
+  const fact = (label, value, cls) => {
+    const f = el("div");
+    f.append(el("div", "fact-label", label), el("div", "fact-value " + (cls || ""), value));
+    facts.append(f);
+  };
+  if (route.history.length > 1) {
+    const diff = point.price - route.history[0].price;
+    const lowest = route.history.reduce((a, b) => (b.price < a.price ? b : a));
+    fact("Since first check", diff === 0 ? "No change" : (diff < 0 ? "▼ " : "▲ ") + money(Math.abs(diff)), diff < 0 ? "down" : diff > 0 ? "up" : "");
+    fact("Lowest seen", money(lowest.price) + " · " + shortDate(lowest.checked_on));
+  }
+  const daysLeft = daysBetween(state.today, route.depart_date);
+  fact("Departs", daysLeft > 0 ? "in " + daysLeft + " days" : daysLeft === 0 ? "today" : "departed");
+  top.append(facts);
+  box.append(top);
+
+  if (route.last_error) box.append(el("p", "error", "Latest check failed: " + route.last_error));
+
+  // Chart, or the first-day range view
+  if (route.history.length > 1 || route.google_history.length > 1) box.append(chartSection(route, point));
+  else if (point.typical_low != null) box.append(rangeView(point));
+  else box.append(el("p", "muted small", "The chart starts after the next morning check."));
+
+  box.append(cardFoot(route, trip));
+  return box;
+}
+
+function cardFoot(route, trip) {
+  const foot = el("div", "card-foot");
+  foot.append(route.history.length ? historyTable(route) : el("span"));
+  const remove = el("button", "ghost small-btn remove", trip.dates.length > 1 ? "Stop tracking these dates" : "Stop tracking");
+  remove.type = "button";
+  remove.addEventListener("click", () => removeRoute(route));
+  foot.append(remove);
+  return foot;
+}
+
+function historyTable(route) {
+  const details = el("details");
+  details.append(el("summary", null, "All prices (" + route.history.length + ")"));
+  const table = el("table", "history-table");
+  const head = el("tr");
+  ["Date", "Price", "Google says", "Cheapest airline"].forEach((h) => head.append(el("th", null, h)));
+  table.append(head);
+  for (const p of [...route.history].reverse()) {
+    const row = el("tr");
+    row.append(
+      el("td", null, longDate(p.checked_on)),
+      el("td", null, money(p.price)),
+      el("td", null, p.price_level ? capitalise(p.price_level) : "—"),
+      el("td", null, p.airline || "—"),
+    );
+    table.append(row);
+  }
+  details.append(table);
+  return details;
+}
+
+// First day: show where today's price sits within Google's typical range.
+function rangeView(point) {
+  const box = el("div", "range-view");
+  box.append(el("div", "range-title", "Where today's price sits"));
+  box.append(el("div", "muted small", "The shaded part is Google's typical price range for this trip. Your price chart builds up from the next morning check."));
+  const low = Math.min(point.typical_low, point.price);
+  const high = Math.max(point.typical_high, point.price);
+  const pad = (high - low) * 0.15 || 50;
+  const min = low - pad;
+  const max = high + pad;
+  const pos = (v) => ((v - min) / (max - min)) * 100 + "%";
+
+  const track = el("div", "range-track");
+  const typical = el("div", "range-typical");
+  typical.style.left = pos(point.typical_low);
+  typical.style.width = "calc(" + pos(point.typical_high) + " - " + pos(point.typical_low) + ")";
+  const marker = el("div", "range-marker");
+  marker.style.left = pos(point.price);
+  const label = el("div", "range-marker-label", "Today " + money(point.price));
+  label.style.left = pos(point.price);
+  const lowLabel = el("div", "range-end", money(point.typical_low));
+  lowLabel.style.left = pos(point.typical_low);
+  const highLabel = el("div", "range-end", money(point.typical_high));
+  highLabel.style.left = pos(point.typical_high);
+  track.append(typical, lowLabel, highLabel, marker, label);
+  box.append(track);
+  return box;
+}
+
+// ---------------------------------------------------------------------------------
+// Price chart
+// ---------------------------------------------------------------------------------
+
+function chartSection(route, point) {
+  const box = el("div");
+  const checks = route.history.map((p) => ({ date: p.checked_on, price: p.price, airline: p.airline }));
+  // Google's history is shown for the days before you started tracking.
+  const firstCheck = checks.length ? checks[0].date : null;
+  const context = route.google_history
+    .filter(([date]) => !firstCheck || date < firstCheck)
+    .map(([date, price]) => ({ date, price }));
+  const band = point.typical_low != null ? [point.typical_low, point.typical_high] : null;
+
+  const bar = el("div", "chart-bar");
+  const legend = el("div", "legend");
+  const key = (cls, text) => {
+    const item = el("span");
+    item.append(el("i", cls), text);
+    legend.append(item);
+  };
+  key("key-line", "Your daily checks");
+  if (context.length) key("key-line context", "Google's price history");
+  if (band) key("key-band", "Typical range");
+  bar.append(legend);
+
+  const all = context.concat(checks);
+  const span = daysBetween(all[0].date, all[all.length - 1].date);
+  const chart = el("div", "chart");
+  if (!chartRange[route.id]) chartRange[route.id] = "all";
+  if (span > 20) {
+    const ranges = el("div", "ranges");
+    ranges.setAttribute("role", "group");
+    ranges.setAttribute("aria-label", "Time range");
+    for (const [value, text] of [["14", "2W"], ["30", "1M"], ["all", "All"]]) {
+      const b = el("button", null, text);
+      b.type = "button";
+      b.setAttribute("aria-pressed", String(chartRange[route.id] === value));
+      b.addEventListener("click", () => {
+        chartRange[route.id] = value;
+        ranges.querySelectorAll("button").forEach((other) => other.setAttribute("aria-pressed", String(other === b)));
+        drawChart(chart, { checks, context, band, range: value });
+      });
+      ranges.append(b);
+    }
+    bar.append(ranges);
+  }
+  box.append(bar, chart);
+  requestAnimationFrame(() => drawChart(chart, { checks, context, band, range: chartRange[route.id] }));
+  return box;
+}
+
+function niceTicks(min, max, count) {
+  if (min === max) { min -= 10; max += 10; }
+  const rough = (max - min) / count;
+  const power = Math.pow(10, Math.floor(Math.log10(rough)));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * power).find((s) => s >= rough);
+  const ticks = [];
+  for (let v = Math.floor(min / step) * step; v <= max + step * 0.001; v += step) ticks.push(Math.round(v));
+  if (ticks[ticks.length - 1] < max) ticks.push(ticks[ticks.length - 1] + step);
+  return ticks;
+}
+
+function drawChart(container, { checks, context, band, range }) {
+  const width = container.clientWidth;
+  if (!width) return;
+  const height = width < 520 ? 210 : 260;
+  const pad = { top: 18, right: 64, bottom: 28, left: 52 };
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+
+  // Keep only the chosen time range
+  const all = context.concat(checks);
+  const lastDate = all[all.length - 1].date;
+  const startDate = range === "all" ? all[0].date : addDays(lastDate, -Number(range));
+  const inView = (p) => p.date >= startDate;
+  const ctx = context.filter(inView);
+  const mine = checks.filter(inView);
+  const shown = ctx.concat(mine);
+  const firstDate = shown[0].date;
+  const spanDays = Math.max(1, daysBetween(firstDate, lastDate));
+
+  // Scales: zoom in on the prices. The typical band is included only when it is
+  // close by; a very wide band just runs off the top or bottom of the chart.
+  const prices = shown.map((p) => p.price);
+  let lo = Math.min(...prices);
+  let hi = Math.max(...prices);
+  const reach = Math.max(hi - lo, hi * 0.1) * 0.5;
+  if (band) {
+    lo = Math.min(lo, Math.max(band[0], lo - reach));
+    hi = Math.max(hi, Math.min(band[1], hi + reach));
+  }
+  const room = (hi - lo) * 0.08 || hi * 0.05;
+  const ticks = niceTicks(lo - room, hi + room, 4);
+  lo = ticks[0];
+  hi = ticks[ticks.length - 1];
+  const x = (date) => pad.left + (shown.length === 1 ? plotW / 2 : (daysBetween(firstDate, date) / spanDays) * plotW);
+  const y = (v) => pad.top + plotH - ((v - lo) / (hi - lo)) * plotH;
+
+  const chart = svg("svg", { viewBox: "0 0 " + width + " " + height, height, role: "img" });
+  chart.setAttribute("aria-label", "Price chart from " + longDate(firstDate) + " to " + longDate(lastDate));
+
+  // Typical-range band
+  if (band) {
+    const top = y(Math.min(band[1], hi));
+    const bottom = y(Math.max(band[0], lo));
+    if (bottom > top) svg("rect", { class: "band", x: pad.left, width: plotW, y: top, height: bottom - top }, chart);
+  }
+
+  // Gridlines and price labels
+  const grid = svg("g", { class: "grid" }, chart);
+  const axis = svg("g", { class: "axis" }, chart);
+  for (const t of ticks) {
+    svg("line", { x1: pad.left, x2: pad.left + plotW, y1: y(t), y2: y(t) }, grid);
+    svg("text", { x: pad.left - 8, y: y(t) + 4, "text-anchor": "end" }, axis).textContent = money(t);
+  }
+
+  // Date labels spread evenly, never crowded
+  const labelCount = Math.max(2, Math.min(6, Math.floor(plotW / 90)));
+  const step = Math.max(1, Math.round(spanDays / (labelCount - 1)));
+  for (let d = 0; d < spanDays - step * 0.5; d += step) {
+    const date = addDays(firstDate, d);
+    svg("text", { x: x(date), y: height - 6, "text-anchor": "middle" }, axis).textContent = shortDate(date);
+  }
+  svg("text", { x: x(lastDate), y: height - 6, "text-anchor": "middle" }, axis).textContent = shortDate(lastDate);
+
+  const path = (points) => points.map((p, i) => (i ? "L" : "M") + x(p.date).toFixed(1) + "," + y(p.price).toFixed(1)).join(" ");
+
+  // Google's history (grey), then your checks (blue)
+  if (ctx.length > 1) svg("path", { class: "line context", d: path(ctx) }, chart);
+  if (ctx.length && mine.length) {
+    const sx = x(mine[0].date);
+    svg("line", { class: "start-line", x1: sx, x2: sx, y1: pad.top, y2: pad.top + plotH }, chart);
+    svg("text", { class: "note", x: sx - 6, y: pad.top + 10, "text-anchor": "end" }, chart).textContent = "Tracking started";
+  }
+  if (mine.length > 1) svg("path", { class: "line", d: path(mine) }, chart);
+  if (mine.length <= 40) {
+    for (const p of mine.slice(0, -1)) svg("circle", { class: "dot", cx: x(p.date), cy: y(p.price), r: 3.5 }, chart);
+  }
+
+  // Lowest of your checks, labelled (if it isn't the latest point)
+  if (mine.length > 2) {
+    const low = mine.reduce((a, b) => (b.price < a.price ? b : a));
+    if (low !== mine[mine.length - 1]) {
+      svg("text", { class: "note", x: x(low.date), y: y(low.price) + 18, "text-anchor": "middle" }, chart).textContent = "Low " + money(low.price);
+    }
+  }
+
+  // Latest point with its price
+  const end = mine.length ? mine[mine.length - 1] : ctx[ctx.length - 1];
+  svg("circle", { class: mine.length ? "dot" : "dot context", cx: x(end.date), cy: y(end.price), r: 5 }, chart);
+  svg("text", { class: "end-label", x: x(end.date) + 10, y: y(end.price) + 4 }, chart).textContent = money(end.price);
+
+  // Hover: a vertical line snaps to the nearest day and a tooltip lists the prices
+  const crosshair = svg("line", { class: "crosshair", y1: pad.top, y2: pad.top + plotH, visibility: "hidden" }, chart);
+  const hoverDot = svg("circle", { class: "dot", r: 5, visibility: "hidden" }, chart);
+  const hit = svg("rect", { x: pad.left - 10, y: 0, width: plotW + 20, height, fill: "transparent" }, chart);
+  const tooltip = el("div", "tooltip");
+  tooltip.hidden = true;
+  const byDate = new Map();
+  for (const p of ctx) byDate.set(p.date, { date: p.date, google: p.price });
+  for (const p of mine) byDate.set(p.date, Object.assign(byDate.get(p.date) || { date: p.date }, { mine: p.price, airline: p.airline }));
+  const days = [...byDate.values()];
+
+  const move = (event) => {
+    const box = chart.getBoundingClientRect();
+    const px = ((event.clientX - box.left) / box.width) * width;
+    const near = days.reduce((a, b) => (Math.abs(x(b.date) - px) < Math.abs(x(a.date) - px) ? b : a));
+    const cx = x(near.date);
+    const value = near.mine != null ? near.mine : near.google;
+    crosshair.setAttribute("x1", cx);
+    crosshair.setAttribute("x2", cx);
+    crosshair.setAttribute("visibility", "visible");
+    hoverDot.setAttribute("cx", cx);
+    hoverDot.setAttribute("cy", y(value));
+    hoverDot.setAttribute("class", near.mine != null ? "dot" : "dot context");
+    hoverDot.setAttribute("visibility", "visible");
+
+    tooltip.replaceChildren(el("div", "t-date", longDate(near.date)));
+    const row = (keyClass, label, price) => {
+      const r = el("div", "t-row");
+      r.append(el("i", keyClass), label, el("strong", null, money(price)));
+      tooltip.append(r);
+    };
+    if (near.mine != null) row("key-line", near.airline ? "Your check · " + near.airline : "Your check", near.mine);
+    if (near.google != null) row("key-line context", "Google", near.google);
+    tooltip.hidden = false;
+    const left = Math.min(Math.max(cx - tooltip.offsetWidth / 2, 0), width - tooltip.offsetWidth);
+    tooltip.style.left = left + "px";
+    tooltip.style.top = Math.max(y(value) - tooltip.offsetHeight - 14, 0) + "px";
+  };
+  hit.addEventListener("pointermove", move);
+  hit.addEventListener("pointerdown", move);
+  hit.addEventListener("pointerleave", () => {
+    crosshair.setAttribute("visibility", "hidden");
+    hoverDot.setAttribute("visibility", "hidden");
+    tooltip.hidden = true;
+  });
+
+  container.replaceChildren(chart, tooltip);
+}
+
+// Tiny trend line for the dates table
+function sparkline(route) {
+  const w = 100;
+  const h = 28;
+  let points = route.history.map((p) => ({ date: p.checked_on, price: p.price }));
+  if (points.length < 2) {
+    points = route.google_history.slice(-30).map(([date, price]) => ({ date, price })).concat(points);
+  }
+  const box = svg("svg", { viewBox: "0 0 " + w + " " + h, width: w, height: h, "aria-hidden": "true" });
+  if (points.length < 2) return box;
+  const values = points.map((p) => p.price);
+  const lo = Math.min(...values);
+  const hi = Math.max(...values);
+  const x = (i) => 2 + (i / (points.length - 1)) * (w - 8);
+  const y = (v) => (hi === lo ? h / 2 : 3 + (1 - (v - lo) / (hi - lo)) * (h - 6));
+  svg("path", {
+    d: points.map((p, i) => (i ? "L" : "M") + x(i).toFixed(1) + "," + y(p.price).toFixed(1)).join(" "),
+    fill: "none", stroke: "var(--series)", "stroke-width": 1.5, "stroke-linejoin": "round",
+  }, box);
+  svg("circle", { cx: x(points.length - 1), cy: y(values[values.length - 1]), r: 2.5, fill: "var(--series)" }, box);
+  return box;
+}
+
+async function removeRoute(route) {
+  const name = route.origin + " → " + route.destination + " (" + tripDates(route) + ")";
+  if (!confirm("Stop tracking " + name + " and delete its price history?")) return;
+  await api("/api/routes/" + route.id, { method: "DELETE" });
+  showToast("Stopped tracking " + name);
+  loadRoutes();
+}
+
+// Redraw charts when the window width changes
+let resizeTimer;
+let lastWidth = window.innerWidth;
+window.addEventListener("resize", () => {
+  if (window.innerWidth === lastWidth) return; // phones fire resize when scrolling
+  lastWidth = window.innerWidth;
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(renderTrips, 150);
+});
+
+// ---------------------------------------------------------------------------------
+// Add-flight form
+// ---------------------------------------------------------------------------------
 
 const form = document.getElementById("add-form");
-const tripType = document.getElementById("trip-type");
+const formPanel = document.getElementById("form-panel");
 const dateRows = document.getElementById("date-rows");
 const addDateButton = document.getElementById("add-date");
+const tripType = () => form.querySelector("input[name=trip_type]:checked").value;
 
+function openForm() {
+  formPanel.hidden = false;
+  document.getElementById("open-form").hidden = true;
+  formPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+  form.origin.focus({ preventScroll: true });
+}
+
+function closeForm() {
+  formPanel.hidden = true;
+  document.getElementById("open-form").hidden = false;
+  resetForm();
+}
+
+document.getElementById("open-form").addEventListener("click", openForm);
+document.getElementById("close-form").addEventListener("click", closeForm);
+
+// Airport suggestions: type a city or code, pick from the list
+const airportList = document.getElementById("airport-list");
+for (const [code, city, name] of AIRPORTS) {
+  const option = document.createElement("option");
+  option.value = code;
+  option.label = city + " · " + name;
+  airportList.append(option);
+}
+
+function normaliseAirport(input) {
+  const text = input.value.trim();
+  if (!text) return;
+  const upper = text.toUpperCase();
+  if (!AIRPORT_BY_CODE[upper] && text.length > 3) {
+    // Typed a city name: use its first airport
+    const lower = text.toLowerCase();
+    const match = AIRPORTS.find(([, city]) => city.toLowerCase() === lower)
+      || AIRPORTS.find(([, city]) => city.toLowerCase().startsWith(lower));
+    if (match) input.value = match[0];
+  } else {
+    input.value = upper;
+  }
+}
+
+function showAirportHint(input) {
+  const hint = document.getElementById(input.name + "-hint");
+  const airport = AIRPORT_BY_CODE[input.value.trim().toUpperCase()];
+  hint.textContent = airport ? airport.city + " · " + airport.name : "";
+}
+
+for (const input of [form.origin, form.destination]) {
+  input.addEventListener("change", () => { normaliseAirport(input); showAirportHint(input); });
+  input.addEventListener("input", () => showAirportHint(input));
+}
+
+document.getElementById("swap").addEventListener("click", () => {
+  [form.origin.value, form.destination.value] = [form.destination.value, form.origin.value];
+  showAirportHint(form.origin);
+  showAirportHint(form.destination);
+  routeChanged();
+});
+
+// Date rows
 function addDateRow() {
   const row = el("div", "date-row");
-  const depart = el("label", null, "Depart");
-  const departInput = el("input");
+  const depart = el("label", "field", "Depart");
+  const departInput = el("input", "depart");
   departInput.type = "date";
-  departInput.className = "depart";
   departInput.required = true;
   depart.append(departInput);
 
-  const back = el("label", "return-field", "Return");
-  const backInput = el("input");
+  const back = el("label", "field return-field", "Return");
+  const backInput = el("input", "return");
   backInput.type = "date";
-  backInput.className = "return";
   back.append(backInput);
 
-  const remove = el("button", "link remove-date", "Remove");
+  const remove = el("button", "ghost small-btn remove-date", "Remove");
   remove.type = "button";
   remove.addEventListener("click", () => {
     row.remove();
@@ -92,16 +753,17 @@ function addDateRow() {
   return row;
 }
 
-// Show or hide return dates and Remove buttons to match the form.
 function updateDateRows() {
-  const roundTrip = tripType.value === "round_trip";
+  const roundTrip = tripType() === "round_trip";
   const today = state.today || "";
   const rows = [...dateRows.children];
   for (const row of rows) {
+    const depart = row.querySelector(".depart");
+    const back = row.querySelector(".return");
     row.querySelector(".return-field").hidden = !roundTrip;
-    row.querySelector(".return").required = roundTrip;
-    row.querySelector(".depart").min = today;
-    row.querySelector(".return").min = row.querySelector(".depart").value || today;
+    back.required = roundTrip;
+    depart.min = today;
+    back.min = depart.value || today;
     row.querySelector(".remove-date").hidden = rows.length === 1;
   }
   addDateButton.hidden = rows.length >= (state.max_dates || 5);
@@ -112,17 +774,20 @@ function updateBudget() {
   const adding = dateRows.children.length;
   const tracking = state.routes.filter((r) => r.active).length;
   const perMonth = (tracking + adding) * 30;
-  let text = "Uses " + adding + (adding === 1 ? " search" : " searches") + " now, then about " +
-    perMonth + " a month for all " + (tracking + adding) + " tracked flights";
-  if (searchesLeft != null) text += " (" + searchesLeft + " left this month)";
+  let text = "Uses " + adding + (adding === 1 ? " search" : " searches") + " now, then about " + perMonth +
+    " a month for all " + (tracking + adding) + " tracked dates";
+  if (usage && usage.left != null) text += " (" + usage.left + " left this month)";
   text += ".";
-  if (searchesPerMonth && perMonth > searchesPerMonth) {
-    text += " ⚠️ That's more than your " + searchesPerMonth + " a month, so some checks would fail near the end of the month.";
+  if (usage && usage.per_month && perMonth > usage.per_month) {
+    text += " ⚠️ That's more than your " + usage.per_month + " a month, so some checks would fail near the end of the month.";
   }
   document.getElementById("budget").textContent = text;
 }
 
-tripType.addEventListener("change", updateDateRows);
+form.querySelectorAll("input[name=trip_type]").forEach((radio) => radio.addEventListener("change", () => {
+  updateDateRows();
+  routeChanged();
+}));
 dateRows.addEventListener("change", updateDateRows);
 addDateButton.addEventListener("click", () => addDateRow().querySelector(".depart").focus());
 
@@ -131,10 +796,12 @@ function resetForm() {
   dateRows.replaceChildren();
   addDateRow();
   clearAirlines();
+  showAirportHint(form.origin);
+  showAirportHint(form.destination);
+  document.getElementById("form-error").textContent = "";
 }
 
-// --- Finding the airlines that fly a route ---
-
+// Finding the airlines that fly a route
 const findButton = document.getElementById("find-airlines");
 const airlineHint = document.getElementById("airline-hint");
 const airlineList = document.getElementById("airline-list");
@@ -143,15 +810,16 @@ const selectAll = document.getElementById("select-all");
 const DEFAULT_HINT = airlineHint.textContent;
 
 function routeFromForm() {
-  const first = dateRows.children[0];
+  normaliseAirport(form.origin);
+  normaliseAirport(form.destination);
   return {
     origin: form.origin.value,
     destination: form.destination.value,
-    trip_type: tripType.value,
-    dates: [{
-      depart_date: first.querySelector(".depart").value,
-      return_date: first.querySelector(".return").value || null,
-    }],
+    trip_type: tripType(),
+    dates: [...dateRows.children].map((row) => ({
+      depart_date: row.querySelector(".depart").value,
+      return_date: row.querySelector(".return").value || null,
+    })),
   };
 }
 
@@ -161,11 +829,10 @@ findButton.addEventListener("click", async () => {
   findButton.disabled = true;
   findButton.textContent = "Finding airlines…";
   try {
-    const { airlines } = await api("/api/airlines", {
-      method: "POST",
-      body: JSON.stringify(routeFromForm()),
-    });
-    showAirlines(airlines);
+    const route = routeFromForm();
+    route.dates = route.dates.slice(0, 1);
+    const { airlines } = await api("/api/airlines", { method: "POST", body: JSON.stringify(route) });
+    showAirlines(airlines, route);
     loadUsage();
   } catch (err) {
     error.textContent = err.message;
@@ -175,7 +842,7 @@ findButton.addEventListener("click", async () => {
   }
 });
 
-function showAirlines(airlines) {
+function showAirlines(airlines, route) {
   airlineBoxes.replaceChildren();
   for (const airline of airlines) {
     const chip = el("label", "chip");
@@ -187,10 +854,8 @@ function showAirlines(airlines) {
     chip.append(box, document.createTextNode(airline.name), el("span", "from", "from " + money(airline.price)));
     airlineBoxes.append(chip);
   }
-  const route = routeFromForm();
-  airlineHint.textContent = airlines.length + " airlines fly " + route.origin.toUpperCase() + " → " +
-    route.destination.toUpperCase() + " on " + shortDate(route.dates[0].depart_date) +
-    ". Untick any you don't want. With all ticked, any airline counts.";
+  airlineHint.textContent = airlines.length + " airlines fly " + route.origin + " → " + route.destination + " on " +
+    shortDate(route.dates[0].depart_date) + ". Untick any you don't want. With all ticked, any airline counts.";
   airlineList.hidden = false;
   findButton.hidden = true;
   updateSelectAll();
@@ -203,9 +868,13 @@ function clearAirlines(message) {
   airlineHint.textContent = message || DEFAULT_HINT;
 }
 
-function airlineCheckboxes() {
-  return [...airlineBoxes.querySelectorAll("input[type=checkbox]")];
+function routeChanged() {
+  if (!airlineList.hidden) clearAirlines("The route changed, so find its airlines again (or skip to track any airline).");
 }
+form.origin.addEventListener("change", routeChanged);
+form.destination.addEventListener("change", routeChanged);
+
+const airlineCheckboxes = () => [...airlineBoxes.querySelectorAll("input[type=checkbox]")];
 
 function updateSelectAll() {
   const boxes = airlineCheckboxes();
@@ -220,13 +889,6 @@ selectAll.addEventListener("change", () => {
 });
 airlineBoxes.addEventListener("change", updateSelectAll);
 
-// A different route has different airlines, so the list must be found again.
-for (const field of [form.origin, form.destination, tripType]) {
-  field.addEventListener("change", () => {
-    if (!airlineList.hidden) clearAirlines("The route changed, so find its airlines again (or skip to track any airline).");
-  });
-}
-
 // Which airlines to send: [] means any airline.
 function chosenAirlines() {
   const boxes = airlineCheckboxes();
@@ -239,26 +901,21 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const error = document.getElementById("form-error");
   const button = document.getElementById("add-button");
-  const request = {
-    origin: form.origin.value,
-    destination: form.destination.value,
-    trip_type: tripType.value,
-    airlines: chosenAirlines(),
-    dates: [...dateRows.children].map((row) => ({
-      depart_date: row.querySelector(".depart").value,
-      return_date: row.querySelector(".return").value || null,
-    })),
-  };
   if (!airlineList.hidden && !airlineCheckboxes().some((b) => b.checked)) {
-    error.textContent = "Tick at least one airline, or tick \u201cSelect all\u201d.";
+    error.textContent = "Tick at least one airline, or tick “Select all”.";
     return;
   }
+  const request = Object.assign(routeFromForm(), { airlines: chosenAirlines() });
   error.textContent = "";
   button.disabled = true;
   button.textContent = request.dates.length > 1 ? "Checking " + request.dates.length + " prices…" : "Checking price…";
   try {
-    await api("/api/routes", { method: "POST", body: JSON.stringify(request) });
-    resetForm();
+    const { routes } = await api("/api/routes", { method: "POST", body: JSON.stringify(request) });
+    const found = routes.map(latest).filter(Boolean).map((p) => p.price);
+    showToast("Now tracking " + routes[0].origin + " → " + routes[0].destination +
+      (found.length ? " · from " + money(Math.min(...found)) : ""));
+    delete selectedDate[tripKey(routes[0])]; // open the new trip on its cheapest date
+    closeForm();
     await loadRoutes();
     loadUsage();
   } catch (err) {
@@ -269,218 +926,13 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
+// ---------------------------------------------------------------------------------
+// Start
+// ---------------------------------------------------------------------------------
+
 addDateRow();
-
-async function removeRoute(route) {
-  const name = route.origin + " → " + route.destination;
-  if (!confirm("Stop tracking " + name + " and delete its price history?")) return;
-  await api("/api/routes/" + route.id, { method: "DELETE" });
-  loadRoutes();
-}
-
-// --- Route cards ----------------------------------------------------------------------
-
-function el(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text != null) node.textContent = text;
-  return node;
-}
-
-function renderRoutes() {
-  const container = document.getElementById("routes");
-  container.replaceChildren();
-  if (!state.routes.length) {
-    container.append(el("p", "muted", "No flights tracked yet. Add one above to start."));
-    return;
-  }
-  for (const route of state.routes) container.append(routeCard(route));
-}
-
-function routeCard(route) {
-  const card = el("section", "panel");
-
-  const head = el("div", "route-head");
-  const title = el("div");
-  const heading = el("h2", null, route.origin + " → " + route.destination);
-  heading.append(el("span", "tag", route.trip_type === "round_trip" ? "Round trip" : "One-way"));
-  if (route.airlines.length) heading.append(el("span", "tag", route.airlines.join(", ") + " only"));
-  if (!route.active) heading.append(el("span", "tag", "Finished"));
-  title.append(heading);
-  let dates = "Departs " + longDate(route.depart_date);
-  if (route.return_date) dates += " · Returns " + longDate(route.return_date);
-  title.append(el("div", "muted small", dates));
-  head.append(title);
-  const remove = el("button", "link", "Remove");
-  remove.addEventListener("click", () => removeRoute(route));
-  head.append(remove);
-  card.append(head);
-
-  if (route.last_error) {
-    card.append(el("p", "error", "Last check failed: " + route.last_error));
-  }
-
-  const points = route.history;
-  if (!points.length) {
-    card.append(el("div", "empty-chart", "No prices yet. The first one arrives at the next morning check."));
-    return card;
-  }
-
-  card.append(statTiles(points));
-  const chart = el("div", "chart");
-  card.append(chart);
-  // Draw after the card is on the page, so we know how wide it is.
-  requestAnimationFrame(() => drawChart(chart, points));
-  card.append(priceTable(points));
-  return card;
-}
-
-function statTiles(points) {
-  const latest = points[points.length - 1];
-  const lowest = points.reduce((a, b) => (b.price < a.price ? b : a));
-  const highest = points.reduce((a, b) => (b.price > a.price ? b : a));
-  const first = points[0];
-
-  const stats = el("div", "stats");
-  const tile = (label, value, sub, subClass) => {
-    const box = el("div", "stat");
-    box.append(el("div", "label", label), el("div", "value", value));
-    if (sub) box.append(el("div", "sub " + (subClass || ""), sub));
-    stats.append(box);
-  };
-
-  tile("Latest price", money(latest.price), shortDate(latest.checked_on) + (latest.airline ? " · " + latest.airline : ""));
-  tile("Lowest seen", money(lowest.price), shortDate(lowest.checked_on));
-  tile("Highest seen", money(highest.price), shortDate(highest.checked_on));
-  if (points.length > 1) {
-    const change = latest.price - first.price;
-    const arrow = change < 0 ? "▼ " : change > 0 ? "▲ " : "";
-    const text = arrow + (change === 0 ? "No change" : money(Math.abs(change)));
-    const box = el("div", "stat");
-    box.append(el("div", "label", "Since first check"));
-    box.append(el("div", "value " + (change < 0 ? "down" : change > 0 ? "up" : ""), text));
-    box.append(el("div", "sub", change < 0 ? "Cheaper" : change > 0 ? "More expensive" : "Same price"));
-    stats.append(box);
-  }
-  return stats;
-}
-
-function priceTable(points) {
-  const details = el("details");
-  details.append(el("summary", null, "Show all prices (" + points.length + ")"));
-  const table = el("table");
-  const header = el("tr");
-  ["Date", "Price", "Cheapest airline"].forEach((h) => header.append(el("th", null, h)));
-  table.append(header);
-  for (const p of [...points].reverse()) {
-    const row = el("tr");
-    row.append(el("td", null, longDate(p.checked_on)), el("td", null, money(p.price)), el("td", null, p.airline || "—"));
-    table.append(row);
-  }
-  details.append(table);
-  return details;
-}
-
-// --- Price chart (one line per route, drawn with SVG) ---------------------------------
-
-function svg(tag, attrs, parent) {
-  const node = document.createElementNS(SVG_NS, tag);
-  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
-  if (parent) parent.append(node);
-  return node;
-}
-
-function niceTicks(min, max, count) {
-  if (min === max) { min -= 50; max += 50; }
-  const rough = (max - min) / count;
-  const power = Math.pow(10, Math.floor(Math.log10(rough)));
-  const step = [1, 2, 5, 10].map((m) => m * power).find((s) => s >= rough);
-  const start = Math.floor(min / step) * step;
-  const ticks = [];
-  for (let v = start; v <= max + step / 2; v += step) ticks.push(v);
-  return ticks;
-}
-
-function drawChart(container, points) {
-  const width = container.clientWidth;
-  const chart = svg("svg", { viewBox: "0 0 " + width + " " + CHART_HEIGHT, role: "img" });
-  chart.setAttribute("aria-label", "Price over time, " + points.length + " checks");
-  const plotW = width - PAD.left - PAD.right;
-  const plotH = CHART_HEIGHT - PAD.top - PAD.bottom;
-
-  const values = points.map((p) => p.price);
-  const ticks = niceTicks(Math.min(...values), Math.max(...values), 4);
-  const yMin = ticks[0];
-  const yMax = ticks[ticks.length - 1];
-  const day = (iso) => new Date(iso + "T12:00:00").getTime();
-  const firstDay = day(points[0].checked_on);
-  const lastDay = day(points[points.length - 1].checked_on);
-  const x = (p) => PAD.left + (lastDay === firstDay ? plotW / 2 : ((day(p.checked_on) - firstDay) / (lastDay - firstDay)) * plotW);
-  const y = (v) => PAD.top + plotH - ((v - yMin) / (yMax - yMin)) * plotH;
-
-  // Gridlines and price labels
-  const grid = svg("g", { class: "grid" }, chart);
-  const axis = svg("g", { class: "axis" }, chart);
-  for (const t of ticks) {
-    svg("line", { x1: PAD.left, x2: PAD.left + plotW, y1: y(t), y2: y(t) }, grid);
-    svg("text", { x: PAD.left - 8, y: y(t) + 4, "text-anchor": "end" }, axis).textContent = money(t);
-  }
-  // Date labels: first, last, and a middle one if there's room
-  const dateLabels = [points[0], points[points.length - 1]];
-  if (points.length > 2 && plotW > 300) dateLabels.splice(1, 0, points[Math.floor(points.length / 2)]);
-  for (const p of new Set(dateLabels)) {
-    svg("text", { x: x(p), y: CHART_HEIGHT - 6, "text-anchor": "middle" }, axis).textContent = shortDate(p.checked_on);
-  }
-
-  // The price line and the last point
-  svg("path", { class: "line", d: points.map((p, i) => (i ? "L" : "M") + x(p) + "," + y(p.price)).join(" ") }, chart);
-  const last = points[points.length - 1];
-  svg("circle", { class: "dot", cx: x(last), cy: y(last.price), r: 4.5 }, chart);
-  svg("text", { class: "end-label", x: x(last) + 10, y: y(last.price) + 4 }, chart).textContent = money(last.price);
-
-  // Hover: a vertical line snaps to the nearest day and a tooltip shows the price
-  const crosshair = svg("line", { class: "crosshair", y1: PAD.top, y2: PAD.top + plotH, visibility: "hidden" }, chart);
-  const hoverDot = svg("circle", { class: "dot", r: 4.5, visibility: "hidden" }, chart);
-  const tooltip = el("div", "tooltip");
-  const hitArea = svg("rect", { x: PAD.left - 10, y: 0, width: plotW + 20, height: CHART_HEIGHT, fill: "transparent" }, chart);
-
-  hitArea.addEventListener("pointermove", (event) => {
-    const box = chart.getBoundingClientRect();
-    const px = ((event.clientX - box.left) / box.width) * width;
-    const nearest = points.reduce((a, b) => (Math.abs(x(b) - px) < Math.abs(x(a) - px) ? b : a));
-    const cx = x(nearest);
-    const cy = y(nearest.price);
-    crosshair.setAttribute("x1", cx);
-    crosshair.setAttribute("x2", cx);
-    crosshair.setAttribute("visibility", "visible");
-    hoverDot.setAttribute("cx", cx);
-    hoverDot.setAttribute("cy", cy);
-    hoverDot.setAttribute("visibility", "visible");
-    tooltip.replaceChildren(
-      el("div", "muted small", longDate(nearest.checked_on)),
-      el("strong", null, money(nearest.price)),
-      el("span", "muted small", nearest.airline ? " · " + nearest.airline : ""),
-    );
-    tooltip.style.display = "block";
-    const left = Math.min(Math.max(cx - tooltip.offsetWidth / 2, 0), width - tooltip.offsetWidth);
-    tooltip.style.left = left + "px";
-    tooltip.style.top = Math.max(cy - tooltip.offsetHeight - 12, 0) + "px";
-  });
-  hitArea.addEventListener("pointerleave", () => {
-    crosshair.setAttribute("visibility", "hidden");
-    hoverDot.setAttribute("visibility", "hidden");
-    tooltip.style.display = "none";
-  });
-
-  container.replaceChildren(chart, tooltip);
-}
-
-// Redraw charts when the window size changes
-let resizeTimer;
-window.addEventListener("resize", () => {
-  clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(renderRoutes, 150);
+loadRoutes().then(() => {
+  if (!state.routes.length) openForm();
+  updateDateRows();
 });
-
-loadRoutes();
 loadUsage();

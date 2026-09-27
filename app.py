@@ -171,6 +171,7 @@ def route_summary(route):
         "airlines": airline_names(route),
         "active": bool(route["active"]),
         "history": known,
+        "google_history": json.loads(route["google_history"]) if route["google_history"] else [],
         "last_error": history[-1]["error"] if history and history[-1]["price"] is None else None,
     }
 
@@ -197,8 +198,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.redirect("/login")
         if path == "/":
             return self.send_static("index.html")
-        if path == "/app.js":
-            return self.send_static("app.js")
+        if path in ("/app.js", "/airports.js"):
+            return self.send_static(path[1:])
         if path == "/api/routes":
             routes = [route_summary(r) for r in db.list_routes()]
             return self.send_json({
@@ -207,6 +208,7 @@ class Handler(BaseHTTPRequestHandler):
                 "today": prices.today_eastern(),
                 "currency": prices.CURRENCY,
                 "login_required": bool(PASSWORD),
+                "next_check": prices.next_check().isoformat(),
                 "max_dates": MAX_DATES,
             })
         if path == "/api/usage":

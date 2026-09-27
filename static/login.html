@@ -4,19 +4,20 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Flight Tracker</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✈️</text></svg>">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <main class="login">
     <div class="panel">
-      <h1>✈️ Flight Tracker</h1>
-      <p class="muted">Enter your password to see your tracked flights.</p>
+      <div class="brand"><span class="brand-mark" aria-hidden="true">✈</span><span>Flight Tracker</span></div>
+      <p class="muted">Log in to see your tracked flights.</p>
       <form method="post" action="/login">
         <label>Password
           <input type="password" name="password" autocomplete="current-password" required autofocus>
         </label>
         <button type="submit">Log in</button>
-        <p class="error" id="error"></p>
+        <p class="error" id="error" role="alert"></p>
       </form>
     </div>
   </main>

@@ -4,70 +4,101 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Flight Tracker</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✈️</text></svg>">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <main>
-    <header>
-      <div>
-        <h1>✈️ Flight Tracker</h1>
-        <div class="muted small">Prices are checked every day at 7:00 AM Eastern Time.</div>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">✈</span>
+        <span>Flight Tracker</span>
       </div>
-      <div class="right">
-        <span class="muted small" id="usage"></span>
-        <form method="post" action="/logout" id="logout" hidden><button class="link" type="submit">Log out</button></form>
-      </div>
-    </header>
+      <form method="post" action="/logout" id="logout" hidden>
+        <button class="ghost" type="submit">Log out</button>
+      </form>
+    </div>
+  </header>
 
+  <main>
     <div class="banner" id="demo-banner" hidden>
-      <strong>Demo mode:</strong> these prices are made up. Add a SerpApi key to get real Google Flights prices.
+      <strong>Demo mode:</strong> prices are made up. Add a SerpApi key to get real Google Flights prices.
     </div>
 
-    <section class="panel">
-      <h2>Track a new flight</h2>
-      <p class="muted small">Use 3-letter airport codes, like JFK (New York), LAX (Los Angeles) or BOM (Mumbai).</p>
-      <form id="add-form">
-        <div class="add">
-          <label>From
-            <input class="code" name="origin" maxlength="3" placeholder="JFK" required>
+    <!-- Summary tiles -->
+    <section class="summary" id="summary" aria-label="Summary">
+      <div class="tile"><div class="tile-label">Tracking</div><div class="tile-value" id="sum-tracking">–</div><div class="tile-sub" id="sum-tracking-sub"></div></div>
+      <div class="tile"><div class="tile-label">Best deal now</div><div class="tile-value" id="sum-best">–</div><div class="tile-sub" id="sum-best-sub"></div></div>
+      <div class="tile"><div class="tile-label">Next price check</div><div class="tile-value" id="sum-next">–</div><div class="tile-sub" id="sum-next-sub">Every day at 7:00 AM Eastern</div></div>
+      <div class="tile"><div class="tile-label">Searches left</div><div class="tile-value" id="sum-searches">–</div>
+        <div class="meter" aria-hidden="true"><div class="meter-fill" id="sum-meter"></div></div>
+        <div class="tile-sub" id="sum-searches-sub"></div></div>
+    </section>
+
+    <div class="section-head">
+      <h1>Your trips</h1>
+      <button class="primary" id="open-form" type="button">+ Track a flight</button>
+    </div>
+
+    <!-- Add-flight form -->
+    <section class="panel form-panel" id="form-panel" hidden aria-labelledby="form-title">
+      <div class="form-head">
+        <h2 id="form-title">Track a flight</h2>
+        <button class="ghost" type="button" id="close-form" aria-label="Close">✕</button>
+      </div>
+      <form id="add-form" autocomplete="off">
+        <div class="route-fields">
+          <label class="field">From
+            <input class="code" name="origin" list="airport-list" maxlength="40" placeholder="City or code" required>
+            <span class="field-hint" id="origin-hint"></span>
           </label>
-          <label>To
-            <input class="code" name="destination" maxlength="3" placeholder="LAX" required>
+          <button type="button" class="swap" id="swap" aria-label="Swap From and To" title="Swap">⇄</button>
+          <label class="field">To
+            <input class="code" name="destination" list="airport-list" maxlength="40" placeholder="City or code" required>
+            <span class="field-hint" id="destination-hint"></span>
           </label>
-          <label>Trip
-            <select name="trip_type" id="trip-type">
-              <option value="one_way">One-way</option>
-              <option value="round_trip">Round trip</option>
-            </select>
-          </label>
+          <div class="field">
+            <span>Trip</span>
+            <div class="segmented" role="radiogroup" aria-label="Trip type">
+              <label><input type="radio" name="trip_type" value="round_trip" checked><span>Round trip</span></label>
+              <label><input type="radio" name="trip_type" value="one_way"><span>One-way</span></label>
+            </div>
+          </div>
         </div>
+        <datalist id="airport-list"></datalist>
 
         <fieldset>
-          <legend>Dates <span class="muted small">(each date is tracked separately)</span></legend>
+          <legend>Dates <span class="muted">· each one is tracked separately</span></legend>
           <div id="date-rows"></div>
-          <button type="button" class="link" id="add-date">+ Add another date</button>
+          <button type="button" class="ghost small-btn" id="add-date">+ Add another date</button>
         </fieldset>
 
         <fieldset>
-          <legend>Airlines</legend>
-          <p class="muted small" id="airline-hint">Optional: after filling in the route and first date, see which airlines fly it (uses 1 search). Skip this to track any airline.</p>
+          <legend>Airlines <span class="muted">· optional</span></legend>
+          <p class="muted small" id="airline-hint">See which airlines fly this route on the first date (uses 1 search). Skip to track any airline.</p>
           <button type="button" class="secondary" id="find-airlines">Find airlines</button>
           <div id="airline-list" hidden>
             <label class="chip select-all"><input type="checkbox" id="select-all"> Select all</label>
-            <div class="airlines" id="airlines"></div>
+            <div class="chips" id="airlines"></div>
           </div>
         </fieldset>
 
-        <div class="submit-row">
-          <button type="submit" id="add-button">Start tracking</button>
+        <div class="form-foot">
+          <button type="submit" class="primary" id="add-button">Start tracking</button>
           <span class="muted small" id="budget"></span>
         </div>
+        <p class="error" id="form-error" role="alert"></p>
       </form>
-      <p class="error" id="form-error" role="alert"></p>
     </section>
 
-    <div id="routes"></div>
+    <div id="trips" aria-live="polite">
+      <div class="panel skeleton">Loading your trips…</div>
+    </div>
   </main>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+
+  <script src="/airports.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

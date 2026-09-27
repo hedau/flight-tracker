@@ -53,7 +53,12 @@ def today_eastern():
 # --- Getting one price --------------------------------------------------------
 
 def fetch_price(route):
-    """Return (price, airline) for a route, or raise RuntimeError."""
+    """Look up a route's cheapest price, or raise RuntimeError.
+
+    Returns a dict: price, airline, level ("low"/"typical"/"high" from Google),
+    typical_low, typical_high, and history (Google's recent prices as
+    [["2026-09-01", 172], ...]). Everything except price may be None.
+    """
     if demo_mode():
         return demo_price(route)
     return serpapi_price(route)
@@ -84,14 +89,28 @@ def serpapi_search(route):
 
 def serpapi_price(route):
     priced, data = serpapi_search(route)
+    insights = data.get("price_insights") or {}
+    typical = insights.get("typical_price_range") or [None, None]
+    result = {
+        "price": None,
+        "airline": None,
+        "level": insights.get("price_level"),
+        "typical_low": typical[0],
+        "typical_high": typical[1] if len(typical) > 1 else None,
+        # Google gives [unix time, price] pairs; keep one price per day.
+        "history": sorted({
+            datetime.datetime.fromtimestamp(ts, TIMEZONE).date().isoformat(): int(p)
+            for ts, p in insights.get("price_history") or []
+        }.items()),
+    }
     if priced:
         cheapest = min(priced, key=lambda f: f["price"])
         legs = cheapest.get("flights") or [{}]
-        return int(round(cheapest["price"])), legs[0].get("airline")
-
-    lowest = (data.get("price_insights") or {}).get("lowest_price")
-    if lowest:
-        return int(lowest), None
+        result.update(price=int(round(cheapest["price"])), airline=legs[0].get("airline"))
+        return result
+    if insights.get("lowest_price"):
+        result["price"] = int(insights["lowest_price"])
+        return result
     if route.get("airlines"):
         raise RuntimeError("No flights found on the chosen airlines for this route and date")
     raise RuntimeError("No flights found for this route and date")
@@ -106,7 +125,23 @@ def demo_price(route):
     rng = random.Random(key + today_eastern())
     codes = route["airlines"].split(",") if route.get("airlines") else list(KNOWN_AIRLINES)
     airline = KNOWN_AIRLINES.get(rng.choice(codes), "Demo Air")
-    return int(base * rng.uniform(0.85, 1.2)), airline
+    price = int(base * rng.uniform(0.85, 1.2))
+    low, high = int(base * 0.9), int(base * 1.15)
+
+    # 60 days of made-up history that wanders around the base price.
+    history, level, today = [], base * 1.1, now_eastern().date()
+    walk = random.Random(key)
+    for days_ago in range(60, 0, -1):
+        level = max(base * 0.7, level + walk.uniform(-0.04, 0.035) * base)
+        history.append(((today - datetime.timedelta(days=days_ago)).isoformat(), int(level)))
+    return {
+        "price": price,
+        "airline": airline,
+        "level": "low" if price < low else "high" if price > high else "typical",
+        "typical_low": low,
+        "typical_high": high,
+        "history": history,
+    }
 
 
 # --- Which airlines fly a route --------------------------------------------------
@@ -159,16 +194,18 @@ def _get_json(url):
 
 def check_route(route):
     """Look up today's price for one route and save it (or the error)."""
-    price, airline, error = None, None, None
+    result, error = {}, None
     try:
-        price, airline = fetch_price(route)
+        result = fetch_price(route)
     except RuntimeError as err:
         error = str(err)
     db.save_price(
         route["id"], today_eastern(), now_eastern().isoformat(timespec="seconds"),
-        price, airline, "demo" if demo_mode() else "serpapi", error,
+        result, "demo" if demo_mode() else "serpapi", error,
     )
-    return {"route_id": route["id"], "price": price, "error": error}
+    if result.get("history"):
+        db.save_google_history(route["id"], json.dumps(result["history"]))
+    return {"route_id": route["id"], "price": result.get("price"), "error": error}
 
 
 def run_daily_check(scheduled=False):
@@ -193,6 +230,15 @@ def run_daily_check(scheduled=False):
         else:
             checked.append(check_route(route))
     return {"checked": checked, "already_done": already_done, "finished": finished}
+
+
+def next_check():
+    """When the next scheduled check happens (7 AM Eastern, today or tomorrow)."""
+    now = now_eastern()
+    target = now.replace(hour=MORNING_HOUR, minute=0, second=0, microsecond=0)
+    if now >= target:
+        target += datetime.timedelta(days=1)
+    return target
 
 
 def search_usage():

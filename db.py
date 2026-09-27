@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS routes (
     return_date TEXT,
     airlines    TEXT,
     airline_names TEXT,
+    google_history TEXT,
     active      INTEGER NOT NULL DEFAULT 1,
     created_at  TEXT NOT NULL
 );
@@ -39,9 +40,23 @@ CREATE TABLE IF NOT EXISTS prices (
     airline    TEXT,
     source     TEXT NOT NULL,
     error      TEXT,
+    price_level  TEXT,
+    typical_low  INTEGER,
+    typical_high INTEGER,
     UNIQUE (route_id, checked_on)
 );
 """
+
+
+# Columns added after the first version, as (table, column, type).
+ADDED_COLUMNS = [
+    ("routes", "airlines", "TEXT"),
+    ("routes", "airline_names", "TEXT"),
+    ("routes", "google_history", "TEXT"),
+    ("prices", "price_level", "TEXT"),
+    ("prices", "typical_low", "INTEGER"),
+    ("prices", "typical_high", "INTEGER"),
+]
 
 
 def using_postgres():
@@ -96,11 +111,11 @@ def init():
             if statement.strip():
                 conn.execute(statement)
         # Databases created before these columns existed need them added.
-        for column in ("airlines", "airline_names"):
+        for table, column, kind in ADDED_COLUMNS:
             if using_postgres():
-                conn.execute("ALTER TABLE routes ADD COLUMN IF NOT EXISTS %s TEXT" % column)
-            elif column not in {c["name"] for c in conn.execute("PRAGMA table_info(routes)")}:
-                conn.execute("ALTER TABLE routes ADD COLUMN %s TEXT" % column)
+                conn.execute("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s %s" % (table, column, kind))
+            elif column not in {c["name"] for c in conn.execute("PRAGMA table_info(%s)" % table)}:
+                conn.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, column, kind))
 
 
 # --- Routes -----------------------------------------------------------------
@@ -149,21 +164,33 @@ def has_price_for(route_id, checked_on):
     return bool(rows)
 
 
-def save_price(route_id, checked_on, checked_at, price, airline, source, error):
-    """Store one price per route per day. Checking again the same day replaces it."""
+def save_price(route_id, checked_on, checked_at, result, source, error):
+    """Store one price per route per day. Checking again the same day replaces it.
+
+    result holds price, airline, level ("low"/"typical"/"high") and the
+    typical_low/typical_high range that Google Flights reports.
+    """
     execute(
-        "INSERT INTO prices (route_id, checked_on, checked_at, price, airline, source, error)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO prices (route_id, checked_on, checked_at, price, airline, source, error,"
+        " price_level, typical_low, typical_high) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         " ON CONFLICT (route_id, checked_on) DO UPDATE SET"
         " checked_at = excluded.checked_at, price = excluded.price,"
-        " airline = excluded.airline, source = excluded.source, error = excluded.error",
-        (route_id, checked_on, checked_at, price, airline, source, error),
+        " airline = excluded.airline, source = excluded.source, error = excluded.error,"
+        " price_level = excluded.price_level, typical_low = excluded.typical_low,"
+        " typical_high = excluded.typical_high",
+        (route_id, checked_on, checked_at, result.get("price"), result.get("airline"), source, error,
+         result.get("level"), result.get("typical_low"), result.get("typical_high")),
     )
+
+
+def save_google_history(route_id, history_json):
+    execute("UPDATE routes SET google_history = ? WHERE id = ?", (history_json, route_id))
 
 
 def prices_for(route_id):
     return query(
-        "SELECT checked_on, checked_at, price, airline, source, error"
+        "SELECT checked_on, checked_at, price, airline, source, error,"
+        " price_level, typical_low, typical_high"
         " FROM prices WHERE route_id = ? ORDER BY checked_on",
         (route_id,),
     )
