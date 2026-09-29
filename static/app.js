@@ -1230,6 +1230,90 @@ form.addEventListener("submit", async (event) => {
 });
 
 // ---------------------------------------------------------------------------------
+// Notification settings
+// ---------------------------------------------------------------------------------
+
+const notifPanel = document.getElementById("notif-panel");
+const notifButton = document.getElementById("open-notif");
+const notifEmail = document.getElementById("notif-email");
+const notifError = document.getElementById("notif-error");
+const notifStatus = document.getElementById("notif-status");
+
+function showSettings(settings) {
+  // The saved address is shown hidden (he••••@gmail.com); typing replaces it.
+  notifEmail.value = "";
+  notifEmail.placeholder = settings.email || "you@example.com";
+  document.getElementById("notif-lowest").checked = settings.email_lowest;
+  document.getElementById("notif-every").checked = settings.email_every;
+  document.getElementById("notif-test").disabled = !settings.email_ready || !settings.email;
+  document.getElementById("notif-phone").textContent = settings.phone_on
+    ? "📱 Phone notifications are on (ntfy app): a summary after every check, and an alert for each new lowest price."
+    : "📱 Phone notifications are off. Add NTFY_TOPIC on Render to turn them on.";
+  if (!settings.email_ready) notifError.textContent = "Email isn't set up yet: add RESEND_API_KEY on Render.";
+}
+
+async function openNotif() {
+  notifPanel.hidden = false;
+  notifButton.setAttribute("aria-expanded", "true");
+  notifError.textContent = "";
+  notifStatus.textContent = "Anyone with the link can change these settings.";
+  notifPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+  try {
+    showSettings(await api("/api/settings"));
+  } catch (err) {
+    notifError.textContent = err.message;
+  }
+}
+
+function closeNotif() {
+  notifPanel.hidden = true;
+  notifButton.setAttribute("aria-expanded", "false");
+}
+
+notifButton.addEventListener("click", () => (notifPanel.hidden ? openNotif() : closeNotif()));
+document.getElementById("close-notif").addEventListener("click", closeNotif);
+
+document.getElementById("notif-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = document.getElementById("notif-save");
+  notifError.textContent = "";
+  button.disabled = true;
+  try {
+    const settings = await api("/api/settings", {
+      method: "POST",
+      body: JSON.stringify({
+        email: notifEmail.value.trim(),
+        email_lowest: document.getElementById("notif-lowest").checked,
+        email_every: document.getElementById("notif-every").checked,
+      }),
+    });
+    showSettings(settings);
+    notifStatus.textContent = "✓ Saved";
+    showToast("Notification settings saved");
+  } catch (err) {
+    notifError.textContent = err.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById("notif-test").addEventListener("click", async () => {
+  const button = document.getElementById("notif-test");
+  notifError.textContent = "";
+  button.disabled = true;
+  button.textContent = "Sending…";
+  try {
+    const { email } = await api("/api/settings/test", { method: "POST", body: "{}" });
+    notifStatus.textContent = "✓ Test email sent to " + email;
+  } catch (err) {
+    notifError.textContent = err.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Send test email";
+  }
+});
+
+// ---------------------------------------------------------------------------------
 // Start
 // ---------------------------------------------------------------------------------
 

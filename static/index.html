@@ -67,9 +67,37 @@
             <option value="drop">Biggest drop (7 days)</option>
           </select>
         </label>
+        <button class="outline" id="open-notif" type="button" aria-expanded="false" aria-controls="notif-panel">🔔 Notifications</button>
         <button class="primary" id="open-form" type="button">+ Track a flight</button>
       </div>
     </div>
+
+    <!-- Notification settings -->
+    <section class="panel notif" id="notif-panel" hidden aria-labelledby="notif-title">
+      <div class="form-head">
+        <h2 id="notif-title">🔔 Notifications</h2>
+        <button class="ghost" type="button" id="close-notif" aria-label="Close">✕</button>
+      </div>
+      <form id="notif-form" autocomplete="off">
+        <label class="field">Send emails to
+          <input type="email" id="notif-email" name="email" maxlength="254" autocomplete="email">
+          <span class="field-hint wrap-hint">On Resend's free plan, emails can only go to the address you signed up to Resend with.</span>
+        </label>
+        <div class="switches">
+          <label class="switch-row"><input type="checkbox" id="notif-lowest"><span class="sw" aria-hidden="true"></span>
+            <span><b>New lowest price</b><br><span class="muted small">Email when a check finds a price lower than every earlier check.</span></span></label>
+          <label class="switch-row"><input type="checkbox" id="notif-every"><span class="sw" aria-hidden="true"></span>
+            <span><b>After every check</b><br><span class="muted small">Email a summary after each 7 AM and 7 PM check (2 emails a day).</span></span></label>
+        </div>
+        <p class="phone-note" id="notif-phone"></p>
+        <div class="form-foot">
+          <button type="submit" class="primary" id="notif-save">Save</button>
+          <button type="button" class="secondary" id="notif-test">Send test email</button>
+          <span class="muted small" id="notif-status">Anyone with the link can change these settings.</span>
+        </div>
+        <p class="error" id="notif-error" role="alert"></p>
+      </form>
+    </section>
 
     <!-- Add-flight form -->
     <section class="panel form-panel" id="form-panel" hidden aria-labelledby="form-title">

@@ -339,7 +339,7 @@ def run_daily_check(scheduled=False):
 
     # Alerts go out only for new lowest prices; the prices are saved either way.
     try:
-        alerts = notify.send_alerts(checked)
+        alerts = notify.send_alerts(checked, now)
     except Exception as err:
         alerts = ["Alerts failed: %s" % err]
     return {"checked": checked, "already_done": already_done, "finished": finished, "alerts": alerts}

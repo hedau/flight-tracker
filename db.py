@@ -47,6 +47,10 @@ CREATE TABLE IF NOT EXISTS prices (
     slot       TEXT NOT NULL DEFAULT 'am',
     UNIQUE (route_id, checked_on, slot)
 );
+CREATE TABLE IF NOT EXISTS settings (
+    name  TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 
@@ -223,6 +227,20 @@ def save_price(route_id, checked_on, slot, checked_at, result, source, error):
         " typical_high = excluded.typical_high, options = excluded.options",
         (route_id, checked_on, slot, checked_at, result.get("price"), result.get("airline"), source, error,
          result.get("level"), result.get("typical_low"), result.get("typical_high"), options),
+    )
+
+
+# --- Settings (the Notifications panel) ------------------------------------------
+
+def get_settings():
+    return {row["name"]: row["value"] for row in query("SELECT name, value FROM settings")}
+
+
+def save_setting(name, value):
+    execute(
+        "INSERT INTO settings (name, value) VALUES (?, ?)"
+        " ON CONFLICT (name) DO UPDATE SET value = excluded.value",
+        (name, value),
     )
 
 

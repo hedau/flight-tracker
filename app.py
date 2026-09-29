@@ -33,9 +33,12 @@ import datetime
 import hmac
 import json
 import re
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import db
+import notify
 import prices
 
 IN_CLOUD = "PORT" in os.environ
@@ -50,6 +53,10 @@ AIRPORT_CODE = re.compile(r"^[A-Z]{3}$")
 MAX_DATES = 5  # date pairs per "Start tracking" click; each uses 1 search a day
 MAX_AIRLINES = 20
 MAX_NOTE = 80
+EMAIL_ADDRESS = re.compile(r"^[^@\s]{1,64}@[^@\s]+\.[^@\s]{2,}$")
+TEST_EMAIL_GAP = 60  # seconds between test emails, so nobody can flood the inbox
+last_test_email = [0.0]
+test_email_lock = threading.Lock()
 
 # --- Checking what the user typed ---------------------------------------------------
 
@@ -121,6 +128,25 @@ def parse_note(data):
     return note or None
 
 
+def masked(email):
+    """he••••••@gmail.com: the page is public, so the address is never shown in full."""
+    if not email or "@" not in email:
+        return ""
+    name, domain = email.split("@", 1)
+    return name[:2] + "•" * max(3, len(name) - 2) + "@" + domain
+
+
+def settings_summary():
+    settings = notify.email_settings()
+    return {
+        "email": masked(settings["email"]),
+        "email_lowest": settings["email_lowest"],
+        "email_every": settings["email_every"],
+        "email_ready": bool(notify.RESEND_API_KEY),  # without a Resend key, no email can be sent
+        "phone_on": notify.push_enabled(),
+    }
+
+
 def airline_names(route):
     if route["airline_names"]:
         return route["airline_names"].split(",")
@@ -183,6 +209,8 @@ class Handler(BaseHTTPRequestHandler):
                 "next_check": prices.next_check().isoformat(),
                 "max_dates": MAX_DATES,
             })
+        if path == "/api/settings":
+            return self.send_json(settings_summary())
         if path == "/api/usage":
             try:
                 return self.send_json({"usage": prices.search_usage()})
@@ -202,6 +230,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.handle_add_route(body)
         if path == "/api/routes/edit":
             return self.handle_edit_trip(body)
+        if path == "/api/settings":
+            return self.handle_save_settings(body)
+        if path == "/api/settings/test":
+            return self.handle_test_email()
         if path == "/api/airlines":
             return self.handle_find_airlines(body)
         self.send_json({"error": "Not found"}, 404)
@@ -300,6 +332,37 @@ class Handler(BaseHTTPRequestHandler):
             if r["id"] not in kept:
                 db.delete_route(r["id"])
         self.send_json({"routes": saved})
+
+    def handle_save_settings(self, body):
+        try:
+            data = json.loads(body)
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            return self.send_json({"error": "Invalid request."}, 400)
+        email = str(data.get("email") or "").strip()
+        if email:  # empty means "keep the current address"
+            if len(email) > 254 or not EMAIL_ADDRESS.match(email):
+                return self.send_json({"error": "That doesn't look like an email address."}, 400)
+            db.save_setting("alert_email", email)
+        for name in ("email_lowest", "email_every"):
+            if name in data:
+                db.save_setting(name, "1" if data[name] is True else "0")
+        self.send_json(settings_summary())
+
+    def handle_test_email(self):
+        if not notify.email_enabled():
+            return self.send_json({"error": "Email isn't set up: add RESEND_API_KEY on Render and save an address."}, 400)
+        with test_email_lock:
+            wait = int(last_test_email[0] + TEST_EMAIL_GAP - time.time())
+            if wait > 0:
+                return self.send_json({"error": "Please wait %d seconds before sending another test email." % wait}, 429)
+            last_test_email[0] = time.time()
+        try:
+            notify.send_email(*notify.test_email())
+        except RuntimeError as err:
+            return self.send_json({"error": "Resend couldn't send it: %s" % err}, 502)
+        self.send_json({"ok": True, "email": masked(notify.email_settings()["email"])})
 
     def handle_scheduled_check(self):
         sent = self.headers.get("Authorization", "")

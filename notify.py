@@ -1,10 +1,13 @@
-"""Alerts when a trip hits a new lowest price: an email and a phone notification.
+"""Alerts after the price checks.
 
-An alert goes out only when a check finds a price lower than every earlier
-check of that trip date (never on its first check). Nothing is sent otherwise.
+- Phone: a short summary after every check (7 AM and 7 PM Eastern).
+- Email and phone: an alert when a check finds a price lower than every
+  earlier check of that trip date (never on its first check).
 
-Email, sent with Resend (https://resend.com); needs both:
-  RESEND_API_KEY  from https://resend.com/api-keys
+Email, sent with Resend (https://resend.com). The address and which emails
+to send are chosen in the dashboard's Notifications panel (saved in the
+database); ALERT_EMAIL is only used until an address is saved there.
+  RESEND_API_KEY  from https://resend.com/api-keys (needed for any email)
   ALERT_EMAIL     where the emails go. On Resend's free plan without your own
                   domain, this must be the address you signed up to Resend with.
   EMAIL_FROM      optional sender; defaults to Resend's test address
@@ -27,6 +30,7 @@ import os
 import urllib.error
 import urllib.request
 
+import db
 import prices
 
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
@@ -42,25 +46,52 @@ ACCENT, GOOD, BAD = "#2f6bff", "#0e8a4a", "#d23b30"
 FONT = "'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
 
 
+def email_settings():
+    """The Notifications panel's choices: address, and which emails to send."""
+    saved = db.get_settings()
+    return {
+        "email": saved.get("alert_email") or ALERT_EMAIL,
+        "email_lowest": saved.get("email_lowest", "1") == "1",   # on unless switched off
+        "email_every": saved.get("email_every", "0") == "1",     # off unless switched on
+    }
+
+
 def email_enabled():
-    return bool(RESEND_API_KEY and ALERT_EMAIL)
+    return bool(RESEND_API_KEY and email_settings()["email"])
 
 
 def push_enabled():
     return bool(NTFY_TOPIC)
 
 
-def send_alerts(checked):
-    """Email and notify about the routes that just hit a new lowest price.
+def send_alerts(checked, now=None):
+    """Send the phone summary of this check, then the new-lowest-price alerts.
 
     Returns a list of what was sent, or of what failed (a failure in one
-    doesn't stop the other).
+    doesn't stop the others).
     """
+    results = []
+    if not checked:
+        return results
+    now = now or prices.now_eastern()
+    settings = email_settings()
+    if push_enabled():
+        try:
+            send_push(*summary_push(checked, now), priority=3)
+            results.append("Push: check summary")
+        except RuntimeError as err:
+            results.append("Push failed: %s" % err)
+    if email_enabled() and settings["email_every"]:
+        subject, body = summary_email(checked, now)
+        try:
+            send_email(subject, body)
+            results.append("Email: " + subject)
+        except RuntimeError as err:
+            results.append("Email failed: %s" % err)
     lows = [c for c in checked if c["new_lowest"]]
     if not lows:
-        return []
-    results = []
-    if email_enabled():
+        return results
+    if email_enabled() and settings["email_lowest"]:
         subject, body = lowest_email(lows)
         try:
             send_email(subject, body)
@@ -77,9 +108,9 @@ def send_alerts(checked):
     return results
 
 
-def send_push(title, message):
-    """Send a phone notification through ntfy."""
-    payload = {"topic": NTFY_TOPIC, "title": title, "message": message, "tags": ["airplane"], "priority": 4}
+def send_push(title, message, priority=4):
+    """Send a phone notification through ntfy (priority 3 = normal, 4 = high)."""
+    payload = {"topic": NTFY_TOPIC, "title": title, "message": message, "tags": ["airplane"], "priority": priority}
     if APP_URL:
         payload["click"] = APP_URL
     request = urllib.request.Request(
@@ -100,7 +131,7 @@ def send_push(title, message):
 def send_email(subject, body):
     request = urllib.request.Request(
         "https://api.resend.com/emails",
-        data=json.dumps({"from": EMAIL_FROM, "to": [ALERT_EMAIL], "subject": subject, "html": body}).encode(),
+        data=json.dumps({"from": EMAIL_FROM, "to": [email_settings()["email"]], "subject": subject, "html": body}).encode(),
         headers={
             "Authorization": "Bearer " + RESEND_API_KEY,
             "Content-Type": "application/json",
@@ -122,6 +153,41 @@ def send_email(subject, body):
 
 
 # --- What the alerts say -------------------------------------------------------------
+
+def summary_email(checked, now):
+    """The after-every-check email: each trip date's price and its change."""
+    which = "7 PM" if now.hour >= prices.EVENING_HOUR else "7 AM"
+    subject = "✓ %s price check · %s · %d %s" % (
+        which, now.strftime("%a, %b %-d"), len(checked), "date" if len(checked) == 1 else "dates")
+    rows = ""
+    for c in checked:
+        if c["price"] is None:
+            price = '<span style="color:%s">⚠ Not checked</span>' % BAD
+            change = '<span style="color:%s">%s</span>' % (TEXT_2, esc(c["error"] or "Unknown error"))
+        else:
+            price = "<strong>%s</strong>" % money(c["price"])
+            change = change_text(c["price"], c["previous_price"])
+            if c["new_lowest"]:
+                change += ' <span style="color:%s;font-weight:700">· new low</span>' % GOOD
+        rows += "<tr>%s%s%s%s</tr>" % (
+            td(route_name(c["route"])), td(trip_dates(c["route"])),
+            td(price, right=True), td(change, right=True))
+    body = (
+        p("The %s price check ran at <strong>%s</strong>." % (which, clock(now)))
+        + table(["Trip", "Dates", "Price", "vs last check"], rows, right_from=2)
+        + p("Nonstop or 1 stop · 1 adult · incl. taxes", small=True)
+        + button("Open dashboard")
+    )
+    return subject, page(body)
+
+
+def test_email():
+    """A short email to check the address works (the panel's Send test email)."""
+    body = (p("✓ This is a test from your Flight Tracker. Emails will arrive here.")
+            + p("Change what you get in the dashboard's 🔔 Notifications panel.", small=True)
+            + button("Open dashboard"))
+    return "✓ Flight Tracker test email", page(body)
+
 
 def lowest_email(lows):
     if len(lows) == 1:
@@ -162,6 +228,28 @@ def lowest_email(lows):
 
     body += button("See on dashboard")
     return subject, page(body)
+
+
+def summary_push(checked, now):
+    """Title and text of the after-every-check phone notification."""
+    which = "7 PM" if now.hour >= prices.EVENING_HOUR else "7 AM"
+    title = "✓ %s price check · %d %s" % (which, len(checked), "date" if len(checked) == 1 else "dates")
+    lines = []
+    for c in checked:
+        name = "%s %s" % (route_name(c["route"]), trip_dates(c["route"]))
+        if c["price"] is None:
+            lines.append("⚠ %s: not checked (%s)" % (name, c["error"] or "unknown error"))
+            continue
+        prev = c["previous_price"]
+        if prev is None:
+            change = "first check"
+        elif c["price"] == prev:
+            change = "no change"
+        else:
+            change = "%s %s" % ("▼" if c["price"] < prev else "▲", money(abs(c["price"] - prev)))
+        low = " · 🔻 new low" if c["new_lowest"] else ""
+        lines.append("%s: %s (%s)%s" % (name, money(c["price"]), change, low))
+    return title, "\n".join(lines)
 
 
 def lowest_push(c):
@@ -228,6 +316,16 @@ def money(n):
     return "$" + format(int(round(n)), ",")
 
 
+def change_text(price, previous):
+    if previous is None:
+        return '<span style="color:%s">first check</span>' % MUTED
+    diff = price - previous
+    if diff == 0:
+        return '<span style="color:%s">no change</span>' % MUTED
+    colour, arrow = (GOOD, "▼") if diff < 0 else (BAD, "▲")
+    return '<span style="color:%s">%s %s</span>' % (colour, arrow, money(abs(diff)))
+
+
 def route_name(route):
     return "%s → %s" % (route["origin"], route["destination"])
 
@@ -269,6 +367,7 @@ if __name__ == "__main__":
     import app
     RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
     ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "").strip()
+    db.DATABASE_URL = os.environ.get("DATABASE_URL", "")  # use the same database as the app
     EMAIL_FROM = os.environ.get("EMAIL_FROM", "").strip() or EMAIL_FROM
     NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
     APP_URL = (os.environ.get("APP_URL") or APP_URL).strip().rstrip("/")
@@ -280,5 +379,7 @@ if __name__ == "__main__":
     }
     if not (email_enabled() or push_enabled()):
         raise SystemExit("No alerts set up: add RESEND_API_KEY + ALERT_EMAIL and/or NTFY_TOPIC.")
+    sample["previous_price"] = 1171
+    sample["error"] = None
     for line in send_alerts([sample]):
         print(line)
