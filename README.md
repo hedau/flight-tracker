@@ -1,6 +1,6 @@
 # ✈️ Flight Tracker
 
-Track flight prices every morning and watch how they change on a dashboard.
+Track flight prices twice a day (7 AM and 7 PM Eastern) and watch how they change on a dashboard.
 
 - Add a route: from, to, one-way or round trip, and dates.
 - Every day at **7:00 AM Eastern**, each route's cheapest price (in **USD**) is saved.
@@ -36,17 +36,17 @@ python3 -m venv .venv
 ## How it works
 
 ```
-GitHub Actions  --7 AM ET-->  app on Render  --asks-->  SerpApi (Google Flights)
+GitHub Actions  --7 AM & 7 PM ET-->  app on Render  --asks-->  SerpApi (Google Flights)
 (the alarm clock)             (dashboard)    --saves--> Neon PostgreSQL database
 ```
 
 | File | What it does |
 |---|---|
 | `app.py` | Web server: dashboard, adding/removing routes, the `/api/check` endpoint |
-| `prices.py` | Gets prices from SerpApi (or demo prices) and runs the daily check |
+| `prices.py` | Gets prices from SerpApi (or demo prices) and runs the twice-daily check |
 | `db.py` | Saves routes and prices (SQLite on your Mac, PostgreSQL in the cloud) |
 | `static/` | The dashboard page, its styles, and the chart code |
-| `.github/workflows/morning-check.yml` | The daily alarm that triggers the check |
+| `.github/workflows/morning-check.yml` | The alarm that triggers the 7 AM and 7 PM checks |
 
 ## Put it online (free)
 
@@ -65,13 +65,13 @@ You need three free accounts: **SerpApi**, **Neon** and **Render**.
    Actions and add:
    - `APP_URL`: your Render address, e.g. `https://flight-tracker-xxxx.onrender.com`
    - `CRON_SECRET`: the same value you gave Render
-5. Test it: Actions tab > **Morning price check** > **Run workflow**.
+5. Test it: Actions tab > **Price checks (7 AM and 7 PM ET)** > **Run workflow**.
 
 ### Good to know
 
-- Each route uses about 30 SerpApi searches a month. The dashboard shows how many
+- Each route uses about 60 SerpApi searches a month (2 checks a day). The dashboard shows how many
   are left.
 - GitHub pauses scheduled workflows in repositories with no commits for 60 days.
   If that happens, GitHub emails you; re-enable it from the Actions tab.
 - The free Render plan sleeps when unused, so the dashboard may take up to a
-  minute to open. The morning alarm wakes it up and retries automatically.
+  minute to open. The alarm wakes it up and retries automatically.

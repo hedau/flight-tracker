@@ -14,7 +14,7 @@ const longDate = (iso) =>
   toDate(iso).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
 const daysBetween = (a, b) => Math.round((toDate(b) - toDate(a)) / DAY_MS);
 const addDays = (iso, n) => new Date(toDate(iso).getTime() + n * DAY_MS).toISOString().slice(0, 10);
-// When a check ran, shown in Eastern time like the morning schedule ("11:27 AM ET").
+// When a check ran, shown in Eastern time like the check schedule ("11:27 AM ET").
 const checkTime = (stamp) =>
   stamp ? new Date(stamp).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }) + " ET" : "—";
 
@@ -157,7 +157,7 @@ function renderSummary() {
   const trips = groupTrips(active);
   document.getElementById("sum-tracking").textContent = trips.length + (trips.length === 1 ? " trip" : " trips");
   document.getElementById("sum-tracking-sub").textContent =
-    active.length + (active.length === 1 ? " date" : " dates") + " checked daily";
+    active.length + (active.length === 1 ? " date" : " dates") + " checked twice a day";
 
   // Best deal: the price furthest below Google's typical range, else the cheapest.
   const priced = active.filter(latest);
@@ -196,7 +196,7 @@ function renderSummary() {
     meter.style.width = "100%";
   } else if (usage && usage.left != null) {
     searches.replaceChildren(usage.left.toLocaleString("en-US") + " ", el("small", null, "/ " + usage.per_month));
-    searchesSub.textContent = "~" + active.length * 30 + " needed a month";
+    searchesSub.textContent = "~" + active.length * 60 + " needed a month";
     meter.style.width = Math.max(0, Math.min(100, (usage.left / usage.per_month) * 100)) + "%";
     meter.classList.toggle("low", usage.left < usage.per_month * 0.2);
   }
@@ -225,7 +225,8 @@ function renderCountdown() {
   const hours = Math.floor(minutes / 60);
   document.getElementById("sum-next").textContent = hours ? hours + "h " + (minutes % 60) + "m" : minutes + "m";
   const day = state.next_check.slice(0, 10) === state.today ? "Today" : "Tomorrow";
-  document.getElementById("sum-next-sub").textContent = day + " at 7:00 AM ET";
+  const hour = Number(state.next_check.slice(11, 13));
+  document.getElementById("sum-next-sub").textContent = day + " at " + (hour >= 12 ? "7:00 PM" : "7:00 AM") + " ET";
 }
 setInterval(() => { renderCountdown(); renderClock(); }, 30000);
 
@@ -307,7 +308,7 @@ function renderTrips() {
   if (!trips.length) {
     const empty = el("section", "panel empty");
     empty.append(el("div", "empty-icon", "🛫"), el("h2", null, "No flights tracked yet"));
-    empty.append(el("p", null, "Add a route and your dates. Every morning at 7 AM Eastern the price is checked and saved, so you can see the best time to book."));
+    empty.append(el("p", null, "Add a route and your dates. Every day at 7 AM and 7 PM Eastern the price is checked and saved, so you can see the best time to book."));
     const button = el("button", "primary", "+ Track your first flight");
     button.type = "button";
     button.addEventListener("click", openForm);
@@ -516,7 +517,7 @@ function dateDetail(route, trip) {
   } else if (point.typical_low != null) {
     trend.append(rangeView(point));
   } else {
-    trend.append(el("p", "muted small", "The chart starts after the next morning check."));
+    trend.append(el("p", "muted small", "The chart starts after the next check."));
   }
 
   box.append(main, facts, trend);
@@ -617,7 +618,7 @@ function historyTable(route) {
 function rangeView(point) {
   const box = el("div", "range-view");
   box.append(el("div", "range-title", "Where today's price sits"));
-  box.append(el("div", "muted small", "The shaded part is Google's typical price range for this trip. Your price chart builds up from the next morning check."));
+  box.append(el("div", "muted small", "The shaded part is Google's typical price range for this trip. Your price chart builds up from the next check."));
   const low = Math.min(point.typical_low, point.price);
   const high = Math.max(point.typical_high, point.price);
   const pad = (high - low) * 0.15 || 50;
@@ -663,7 +664,7 @@ function chartSection(route, point) {
     item.append(el("i", cls), text);
     legend.append(item);
   };
-  key("key-line", "Your daily checks");
+  key("key-line", "Your checks");
   if (context.length) key("key-line context", "Google's price history");
   if (band) key("key-band", "Typical range");
   bar.append(legend);
@@ -723,6 +724,11 @@ function drawChart(container, { checks, context, band, range }) {
   const shown = ctx.concat(mine);
   const firstDate = shown[0].date;
   const spanDays = Math.max(1, daysBetween(firstDate, lastDate));
+  // Your checks sit at the time they ran (7 AM or 7 PM); Google's prices and
+  // date labels sit at noon of their day.
+  const timeOf = (v) => (typeof v === "string" ? toDate(v) : v.at ? new Date(v.at) : toDate(v.date)).getTime();
+  const firstT = Math.min(timeOf(firstDate), timeOf(shown[0]));
+  const lastT = Math.max(timeOf(lastDate), timeOf(shown[shown.length - 1]));
 
   // Scales: zoom in on the prices. The typical band is included only when it is
   // close by; a very wide band just runs off the top or bottom of the chart.
@@ -738,7 +744,7 @@ function drawChart(container, { checks, context, band, range }) {
   const ticks = niceTicks(lo - room, hi + room, 4);
   lo = ticks[0];
   hi = ticks[ticks.length - 1];
-  const x = (date) => pad.left + (shown.length === 1 ? plotW / 2 : (daysBetween(firstDate, date) / spanDays) * plotW);
+  const x = (v) => pad.left + (shown.length === 1 || lastT === firstT ? plotW / 2 : ((timeOf(v) - firstT) / (lastT - firstT)) * plotW);
   const y = (v) => pad.top + plotH - ((v - lo) / (hi - lo)) * plotH;
 
   const chart = svg("svg", { viewBox: "0 0 " + width + " " + height, height, role: "img" });
@@ -768,33 +774,33 @@ function drawChart(container, { checks, context, band, range }) {
   }
   svg("text", { x: x(lastDate), y: height - 6, "text-anchor": "middle" }, axis).textContent = shortDate(lastDate);
 
-  const path = (points) => points.map((p, i) => (i ? "L" : "M") + x(p.date).toFixed(1) + "," + y(p.price).toFixed(1)).join(" ");
+  const path = (points) => points.map((p, i) => (i ? "L" : "M") + x(p).toFixed(1) + "," + y(p.price).toFixed(1)).join(" ");
 
   // Google's history (grey), then your checks (blue)
   if (ctx.length > 1) svg("path", { class: "line context", d: path(ctx) }, chart);
   if (ctx.length && mine.length) {
-    const sx = x(mine[0].date);
+    const sx = x(mine[0]);
     svg("line", { class: "start-line", x1: sx, x2: sx, y1: pad.top, y2: pad.top + plotH }, chart);
     svg("text", { class: "note", x: sx - 6, y: pad.top + 10, "text-anchor": "end" }, chart).textContent = "Tracking started";
   }
   if (mine.length > 1) svg("path", { class: "line", d: path(mine) }, chart);
   if (mine.length <= 40) {
-    for (const p of mine.slice(0, -1)) svg("circle", { class: "dot", cx: x(p.date), cy: y(p.price), r: 3.5 }, chart);
+    for (const p of mine.slice(0, -1)) svg("circle", { class: "dot", cx: x(p), cy: y(p.price), r: 3.5 }, chart);
   }
 
   // ⭐ on the lowest of your checks (the latest one, if the price repeated)
   if (mine.length > 1) {
     const low = mine.reduce((a, b) => (b.price <= a.price ? b : a));
-    svg("text", { class: "star", x: x(low.date), y: y(low.price) - 10, "text-anchor": "middle" }, chart).textContent = "⭐";
+    svg("text", { class: "star", x: x(low), y: y(low.price) - 10, "text-anchor": "middle" }, chart).textContent = "⭐";
     if (low !== mine[mine.length - 1]) {
-      svg("text", { class: "note", x: x(low.date), y: y(low.price) + 18, "text-anchor": "middle" }, chart).textContent = "Lowest " + money(low.price);
+      svg("text", { class: "note", x: x(low), y: y(low.price) + 18, "text-anchor": "middle" }, chart).textContent = "Lowest " + money(low.price);
     }
   }
 
   // Latest point with its price
   const end = mine.length ? mine[mine.length - 1] : ctx[ctx.length - 1];
-  svg("circle", { class: mine.length ? "dot" : "dot context", cx: x(end.date), cy: y(end.price), r: 5 }, chart);
-  svg("text", { class: "end-label", x: x(end.date) + 10, y: y(end.price) + 4 }, chart).textContent = money(end.price);
+  svg("circle", { class: mine.length ? "dot" : "dot context", cx: x(end), cy: y(end.price), r: 5 }, chart);
+  svg("text", { class: "end-label", x: x(end) + 10, y: y(end.price) + 4 }, chart).textContent = money(end.price);
 
   // Hover: a vertical line snaps to the nearest day and a tooltip lists the prices
   const crosshair = svg("line", { class: "crosshair", y1: pad.top, y2: pad.top + plotH, visibility: "hidden" }, chart);
@@ -802,16 +808,14 @@ function drawChart(container, { checks, context, band, range }) {
   const hit = svg("rect", { x: pad.left - 10, y: 0, width: plotW + 20, height, fill: "transparent" }, chart);
   const tooltip = el("div", "tooltip");
   tooltip.hidden = true;
-  const byDate = new Map();
-  for (const p of ctx) byDate.set(p.date, { date: p.date, google: p.price });
-  for (const p of mine) byDate.set(p.date, Object.assign(byDate.get(p.date) || { date: p.date }, { mine: p.price, airline: p.airline, at: p.at }));
-  const days = [...byDate.values()];
+  const days = ctx.map((p) => ({ date: p.date, google: p.price }))
+    .concat(mine.map((p) => ({ date: p.date, at: p.at, mine: p.price, airline: p.airline })));
 
   const move = (event) => {
     const box = chart.getBoundingClientRect();
     const px = ((event.clientX - box.left) / box.width) * width;
-    const near = days.reduce((a, b) => (Math.abs(x(b.date) - px) < Math.abs(x(a.date) - px) ? b : a));
-    const cx = x(near.date);
+    const near = days.reduce((a, b) => (Math.abs(x(b) - px) < Math.abs(x(a) - px) ? b : a));
+    const cx = x(near);
     const value = near.mine != null ? near.mine : near.google;
     crosshair.setAttribute("x1", cx);
     crosshair.setAttribute("x2", cx);
@@ -1053,7 +1057,7 @@ function updateBudget() {
     adding = rows.filter((key) => !kept.has(key)).length;
     tracking -= mine.length - (rows.length - adding);
   }
-  const perMonth = (tracking + adding) * 30;
+  const perMonth = (tracking + adding) * 60;  // 2 checks a day
   let text = "Uses " + adding + (adding === 1 ? " search" : " searches") + " now, then about " + perMonth +
     " a month for all " + (tracking + adding) + " tracked dates";
   if (usage && usage.left != null) text += " (" + usage.left + " left this month)";

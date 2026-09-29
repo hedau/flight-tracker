@@ -1,19 +1,23 @@
-# The morning alarm: wakes the app and asks it to check all prices.
+# The alarm clock: wakes the app and asks it to check all prices, twice a day
+# at 7 AM and 7 PM Eastern.
 #
-# GitHub's schedule uses UTC time and ignores daylight saving, so it fires at
-# both 11:00 and 12:00 UTC. The app only checks once it is 7 AM Eastern and
-# skips routes already checked today, so exactly one check happens each day.
+# GitHub's schedule uses UTC time and ignores daylight saving, so each check
+# has two alarms: 11:00 and 12:00 UTC for 7 AM, 23:00 and 00:00 UTC for 7 PM.
+# The app skips routes already checked since 7 AM (or 7 PM), so exactly one
+# morning and one evening check happen each day.
 #
 # Needs two repository secrets (Settings > Secrets and variables > Actions):
 #   APP_URL      e.g. https://flight-tracker-abcd.onrender.com
 #   CRON_SECRET  the same value as CRON_SECRET on Render
 
-name: Morning price check
+name: Price checks (7 AM and 7 PM ET)
 
 on:
   schedule:
-    - cron: "0 11 * * *"
-    - cron: "0 12 * * *"
+    - cron: "0 11 * * *"  # 7 AM EDT (summer)
+    - cron: "0 12 * * *"  # 7 AM EST (winter)
+    - cron: "0 23 * * *"  # 7 PM EDT
+    - cron: "0 0 * * *"   # 7 PM EST
   workflow_dispatch: # adds a "Run workflow" button for testing
 
 jobs:

@@ -1,4 +1,4 @@
-"""Looking up flight prices and running the daily check.
+"""Looking up flight prices and running the twice-daily check.
 
 With a SERPAPI_KEY set, prices come from Google Flights through SerpApi.
 Without one, the app runs in demo mode and makes up believable prices,
@@ -22,7 +22,8 @@ import notify
 SERPAPI_KEY = os.environ.get("SERPAPI_KEY", "")
 CURRENCY = "USD"
 TIMEZONE = ZoneInfo("America/New_York")
-MORNING_HOUR = 7  # the scheduled check runs from 7 AM Eastern Time
+MORNING_HOUR = 7   # the scheduled checks run at 7 AM ...
+EVENING_HOUR = 19  # ... and 7 PM Eastern Time
 TOP_OPTIONS = 5   # how many of the cheapest flights to keep from each check
 AIRLINE_CODE = re.compile(r"^[A-Z0-9]{2}$")  # e.g. DL, B6
 
@@ -262,15 +263,20 @@ def check_route(route):
     Returns what the emails need: the price, the previous check's price,
     and whether it beats every earlier check (a new lowest).
     """
-    today = today_eastern()
-    earlier = [p for p in db.prices_for(route["id"]) if p["checked_on"] < today and p["price"] is not None]
+    now = now_eastern()
+    today, slot = now.date().isoformat(), slot_for(now)
+    # Every earlier check, except the one this check replaces.
+    earlier = [
+        p for p in db.prices_for(route["id"])
+        if p["price"] is not None and (p["checked_on"], p["slot"]) < (today, slot)
+    ]
     result, error = {}, None
     try:
         result = fetch_price(route)
     except RuntimeError as err:
         error = str(err)
     db.save_price(
-        route["id"], today, now_eastern().isoformat(timespec="seconds"),
+        route["id"], today, slot, now.isoformat(timespec="seconds"),
         result, "demo" if demo_mode() else "serpapi", error,
     )
     if result.get("history"):
@@ -296,30 +302,43 @@ def check_route(route):
     }
 
 
-def run_daily_check(scheduled=False):
-    """Check every active route once per day.
+def slot_for(moment):
+    """Which of the day's two checks a time belongs to: "am" before 7 PM, else "pm"."""
+    return "pm" if moment.hour >= EVENING_HOUR else "am"
 
-    Safe to call many times: a route that already has today's price is skipped.
-    When scheduled=True, nothing happens before 7 AM Eastern, which lets the
-    GitHub alarm fire at two UTC times and still work across daylight saving.
+
+def slot_start(moment):
+    """When the check for this time's slot is due: 7 AM or 7 PM that day."""
+    hour = EVENING_HOUR if slot_for(moment) == "pm" else MORNING_HOUR
+    return moment.replace(hour=hour, minute=0, second=0, microsecond=0)
+
+
+def run_daily_check(scheduled=False):
+    """Check every active route twice a day: once from 7 AM and once from 7 PM Eastern.
+
+    Safe to call many times: a route already checked since the current slot
+    began (7 AM or 7 PM) is skipped. When scheduled=True, nothing happens
+    before 7 AM Eastern, which lets the GitHub alarm fire at two UTC times for
+    each check and still work across daylight saving.
     """
     now = now_eastern()
     if scheduled and now.hour < MORNING_HOUR:
         return {"skipped": "Before %d AM Eastern" % MORNING_HOUR, "checked": []}
 
-    today = now.date().isoformat()
+    today, slot = now.date().isoformat(), slot_for(now)
+    since = slot_start(now).isoformat(timespec="seconds")
     checked, finished, already_done = [], [], 0
     for route in db.active_routes():
         if route["depart_date"] < today:
             db.deactivate_route(route["id"])
             finished.append(route["id"])
-        elif db.has_price_for(route["id"], today):
+        elif db.has_price_since(route["id"], today, slot, since):
             already_done += 1
         else:
             checked.append(check_route(route))
 
-    # Email only when something was checked, so the second alarm of the
-    # morning (which finds everything done) doesn't send a duplicate.
+    # Email only when something was checked, so the second alarm for the same
+    # check (which finds everything done) doesn't send a duplicate.
     emails = []
     if checked:
         try:
@@ -330,12 +349,13 @@ def run_daily_check(scheduled=False):
 
 
 def next_check():
-    """When the next scheduled check happens (7 AM Eastern, today or tomorrow)."""
+    """When the next scheduled check happens: the next 7 AM or 7 PM Eastern."""
     now = now_eastern()
-    target = now.replace(hour=MORNING_HOUR, minute=0, second=0, microsecond=0)
-    if now >= target:
-        target += datetime.timedelta(days=1)
-    return target
+    for hour in (MORNING_HOUR, EVENING_HOUR):
+        target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if now < target:
+            return target
+    return (now + datetime.timedelta(days=1)).replace(hour=MORNING_HOUR, minute=0, second=0, microsecond=0)
 
 
 def search_usage():

@@ -99,7 +99,7 @@ def daily_email(checked, now):
             td(price, right=True), td(change, right=True))
 
     body = (
-        p("This morning's price check ran at <strong>%s</strong>." % clock(now))
+        p("Today's %s price check ran at <strong>%s</strong>." % ("evening" if now.hour >= 19 else "morning", clock(now)))
         + table(["Trip", "Dates", "Price", "vs last check"], rows, right_from=2)
         + p("Nonstop or 1 stop · 1 adult · incl. taxes", small=True)
         + button("Open dashboard")

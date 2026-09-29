@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS prices (
     price_level  TEXT,
     typical_low  INTEGER,
     typical_high INTEGER,
-    UNIQUE (route_id, checked_on)
+    slot       TEXT NOT NULL DEFAULT 'am',
+    UNIQUE (route_id, checked_on, slot)
 );
 """
 
@@ -59,6 +60,7 @@ ADDED_COLUMNS = [
     ("prices", "typical_high", "INTEGER"),
     ("prices", "options", "TEXT"),  # the top flights as JSON
     ("routes", "note", "TEXT"),
+    ("prices", "slot", "TEXT NOT NULL DEFAULT 'am'"),  # "am" (7 AM check) or "pm" (7 PM check)
 ]
 
 
@@ -119,6 +121,30 @@ def init():
                 conn.execute("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s %s" % (table, column, kind))
             elif column not in {c["name"] for c in conn.execute("PRAGMA table_info(%s)" % table)}:
                 conn.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, column, kind))
+        _allow_two_checks_a_day(conn, id_column)
+
+
+def _allow_two_checks_a_day(conn, id_column):
+    """Old databases allowed one price per route per day; now it's one per slot
+    (morning and evening). Existing prices count as morning checks."""
+    if using_postgres():
+        conn.execute("ALTER TABLE prices DROP CONSTRAINT IF EXISTS prices_route_id_checked_on_key")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS prices_route_day_slot ON prices (route_id, checked_on, slot)")
+        return
+    # SQLite can't drop a UNIQUE rule, so the table is copied into a new one.
+    table_sql = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'prices'").fetchone()["sql"]
+    if "UNIQUE (route_id, checked_on, slot)" in table_sql:
+        return
+    columns = [c["name"] for c in conn.execute("PRAGMA table_info(prices)")]
+    conn.execute("ALTER TABLE prices RENAME TO prices_old")
+    prices_table = [t for t in SCHEMA.split(";") if "TABLE IF NOT EXISTS prices" in t][0]
+    conn.execute(prices_table.format(id_column=id_column))
+    for table, column, kind in ADDED_COLUMNS:
+        if table == "prices" and column not in {c["name"] for c in conn.execute("PRAGMA table_info(prices)")}:
+            conn.execute("ALTER TABLE prices ADD COLUMN %s %s" % (column, kind))
+    names = ", ".join(columns)
+    conn.execute("INSERT INTO prices (%s) SELECT %s FROM prices_old" % (names, names))
+    conn.execute("DROP TABLE prices_old")
 
 
 # --- Routes -----------------------------------------------------------------
@@ -167,16 +193,20 @@ def delete_route(route_id):
 
 # --- Prices -----------------------------------------------------------------
 
-def has_price_for(route_id, checked_on):
+def has_price_since(route_id, checked_on, slot, since):
+    """Whether this slot already has a price checked at or after `since`
+    (an Eastern time like "2026-09-28T07:00:00-04:00")."""
     rows = query(
-        "SELECT 1 FROM prices WHERE route_id = ? AND checked_on = ? AND price IS NOT NULL",
-        (route_id, checked_on),
+        "SELECT 1 FROM prices WHERE route_id = ? AND checked_on = ? AND slot = ?"
+        " AND checked_at >= ? AND price IS NOT NULL",
+        (route_id, checked_on, slot, since),
     )
     return bool(rows)
 
 
-def save_price(route_id, checked_on, checked_at, result, source, error):
-    """Store one price per route per day. Checking again the same day replaces it.
+def save_price(route_id, checked_on, slot, checked_at, result, source, error):
+    """Store one price per route per slot: "am" (the 7 AM check) and "pm" (7 PM).
+    Checking again in the same slot replaces it.
 
     result holds price, airline, level ("low"/"typical"/"high"), the
     typical_low/typical_high range that Google Flights reports, and options
@@ -184,14 +214,14 @@ def save_price(route_id, checked_on, checked_at, result, source, error):
     """
     options = json.dumps(result["options"]) if result.get("options") else None
     execute(
-        "INSERT INTO prices (route_id, checked_on, checked_at, price, airline, source, error,"
-        " price_level, typical_low, typical_high, options) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        " ON CONFLICT (route_id, checked_on) DO UPDATE SET"
+        "INSERT INTO prices (route_id, checked_on, slot, checked_at, price, airline, source, error,"
+        " price_level, typical_low, typical_high, options) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        " ON CONFLICT (route_id, checked_on, slot) DO UPDATE SET"
         " checked_at = excluded.checked_at, price = excluded.price,"
         " airline = excluded.airline, source = excluded.source, error = excluded.error,"
         " price_level = excluded.price_level, typical_low = excluded.typical_low,"
         " typical_high = excluded.typical_high, options = excluded.options",
-        (route_id, checked_on, checked_at, result.get("price"), result.get("airline"), source, error,
+        (route_id, checked_on, slot, checked_at, result.get("price"), result.get("airline"), source, error,
          result.get("level"), result.get("typical_low"), result.get("typical_high"), options),
     )
 
@@ -202,8 +232,8 @@ def save_google_history(route_id, history_json):
 
 def prices_for(route_id):
     return query(
-        "SELECT checked_on, checked_at, price, airline, source, error,"
+        "SELECT checked_on, slot, checked_at, price, airline, source, error,"
         " price_level, typical_low, typical_high, options"
-        " FROM prices WHERE route_id = ? ORDER BY checked_on",
+        " FROM prices WHERE route_id = ? ORDER BY checked_on, slot",
         (route_id,),
     )

@@ -5,9 +5,9 @@ Run locally:  python3 app.py   then open http://localhost:8000
 Settings come from environment variables (or a .env file on your Mac):
   SERPAPI_KEY         SerpApi key; leave empty for demo prices
   DATABASE_URL        PostgreSQL address; leave empty to use a local file
-  CRON_SECRET         secret the morning alarm (GitHub Actions) must send
-  RESEND_API_KEY      Resend key for the morning emails; leave empty for no emails
-  ALERT_EMAIL         where the morning emails go
+  CRON_SECRET         secret the price-check alarm (GitHub Actions) must send
+  RESEND_API_KEY      Resend key for the price-check emails; leave empty for no emails
+  ALERT_EMAIL         where the price-check emails go
 """
 
 import os
