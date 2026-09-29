@@ -67,6 +67,18 @@ You need three free accounts: **SerpApi**, **Neon** and **Render**.
    - `CRON_SECRET`: the same value you gave Render
 5. Test it: Actions tab > **Price checks (7 AM and 7 PM ET)** > **Run workflow**.
 
+### Alerts for a new lowest price (optional)
+
+When a check finds a price lower than every earlier check of that trip date,
+the app can email you and send a notification to your phone. Nothing is sent
+otherwise. Add these on Render (Environment), then run `python3 notify.py test`
+on your Mac (with the same values in `.env`) to send a sample.
+
+- **Email:** sign up at https://resend.com, create an API key, and set
+  `RESEND_API_KEY` and `ALERT_EMAIL` (your Resend sign-up address).
+- **Phone:** install the free **ntfy** app, subscribe to a hard-to-guess topic
+  name, and set `NTFY_TOPIC` to that name.
+
 ### Good to know
 
 - Each route uses about 60 SerpApi searches a month (2 checks a day). The dashboard shows how many

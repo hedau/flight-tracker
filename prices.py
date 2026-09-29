@@ -260,7 +260,7 @@ def _get_json(url):
 def check_route(route):
     """Look up today's price for one route and save it (or the error).
 
-    Returns what the emails need: the price, the previous check's price,
+    Returns what the alerts need: the price, the previous check's price,
     and whether it beats every earlier check (a new lowest).
     """
     now = now_eastern()
@@ -337,15 +337,12 @@ def run_daily_check(scheduled=False):
         else:
             checked.append(check_route(route))
 
-    # Email only when something was checked, so the second alarm for the same
-    # check (which finds everything done) doesn't send a duplicate.
-    emails = []
-    if checked:
-        try:
-            emails = notify.send_check_emails(checked, now)
-        except Exception as err:  # the prices are saved either way
-            emails = ["Email failed: %s" % err]
-    return {"checked": checked, "already_done": already_done, "finished": finished, "emails": emails}
+    # Alerts go out only for new lowest prices; the prices are saved either way.
+    try:
+        alerts = notify.send_alerts(checked)
+    except Exception as err:
+        alerts = ["Alerts failed: %s" % err]
+    return {"checked": checked, "already_done": already_done, "finished": finished, "alerts": alerts}
 
 
 def next_check():

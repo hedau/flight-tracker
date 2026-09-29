@@ -6,8 +6,9 @@ Settings come from environment variables (or a .env file on your Mac):
   SERPAPI_KEY         SerpApi key; leave empty for demo prices
   DATABASE_URL        PostgreSQL address; leave empty to use a local file
   CRON_SECRET         secret the price-check alarm (GitHub Actions) must send
-  RESEND_API_KEY      Resend key for the price-check emails; leave empty for no emails
-  ALERT_EMAIL         where the price-check emails go
+  RESEND_API_KEY      Resend key for new-lowest-price emails; leave empty for no emails
+  ALERT_EMAIL         where those emails go
+  NTFY_TOPIC          ntfy topic for new-lowest-price phone alerts; leave empty for none
 """
 
 import os
