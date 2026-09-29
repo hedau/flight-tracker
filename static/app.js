@@ -782,9 +782,9 @@ function drawChart(container, { checks, context, band, range }) {
     for (const p of mine.slice(0, -1)) svg("circle", { class: "dot", cx: x(p.date), cy: y(p.price), r: 3.5 }, chart);
   }
 
-  // ⭐ on the lowest of your checks (the first one, if it happened twice)
+  // ⭐ on the lowest of your checks (the latest one, if the price repeated)
   if (mine.length > 1) {
-    const low = mine.reduce((a, b) => (b.price < a.price ? b : a));
+    const low = mine.reduce((a, b) => (b.price <= a.price ? b : a));
     svg("text", { class: "star", x: x(low.date), y: y(low.price) - 10, "text-anchor": "middle" }, chart).textContent = "⭐";
     if (low !== mine[mine.length - 1]) {
       svg("text", { class: "note", x: x(low.date), y: y(low.price) + 18, "text-anchor": "middle" }, chart).textContent = "Lowest " + money(low.price);
