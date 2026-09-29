@@ -125,7 +125,7 @@ def flight_option(flight):
     """One Google Flights result boiled down to what the dashboard shows.
 
     Returns {"airline": "Lufthansa, United", "stops": 1, "via": ["FRA"],
-    "minutes": 1325, "depart": "16:30", "price": 1171}.
+    "minutes": 1325, "depart": "16:30", "price": 1171, "logo": "https://..."}.
     """
     legs = flight.get("flights") or [{}]
     airlines = []
@@ -143,6 +143,7 @@ def flight_option(flight):
         "minutes": flight.get("total_duration"),
         "depart": depart[-5:] or None,
         "price": int(round(flight["price"])),
+        "logo": flight.get("airline_logo") or legs[0].get("airline_logo"),
     }
 
 

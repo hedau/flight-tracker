@@ -165,20 +165,27 @@ function renderSummary() {
   let best = null;
   if (rated.length) best = rated.reduce((a, b) => (vsTypical(latest(b)) < vsTypical(latest(a)) ? b : a));
   else if (priced.length) best = priced.reduce((a, b) => (latest(b).price < latest(a).price ? b : a));
-  const bestValue = document.getElementById("sum-best");
+  const bestValueEl = document.getElementById("sum-best");
   const bestSub = document.getElementById("sum-best-sub");
+  const badge = document.getElementById("sum-best-badge");
+  const photo = document.getElementById("sum-best-photo");
   if (best) {
     const point = latest(best);
-    bestValue.textContent = money(point.price);
-    const level = point.price_level ? " · " + capitalise(point.price_level) : "";
-    bestSub.textContent = best.origin + " → " + best.destination + " · " + shortDate(best.depart_date) + level;
+    bestValueEl.textContent = money(point.price);
+    bestSub.replaceChildren(el("strong", null, best.origin + " → " + best.destination), el("br"),
+      [tripDates(best), point.airline].filter(Boolean).join(" · "));
+    badge.hidden = !(best.history.length > 1 && point.price <= Math.min(...best.history.map((p) => p.price)));
+    showCityPhoto(photo, best.destination);
   } else {
-    bestValue.textContent = "–";
+    bestValueEl.textContent = "–";
     bestSub.textContent = "No prices yet";
+    badge.hidden = true;
+    photo.hidden = true;
   }
 
   renderCountdown();
   renderGreeting();
+  renderClock();
 
   const searches = document.getElementById("sum-searches");
   const meter = document.getElementById("sum-meter");
@@ -188,8 +195,8 @@ function renderSummary() {
     searchesSub.textContent = "No searches used";
     meter.style.width = "100%";
   } else if (usage && usage.left != null) {
-    searches.textContent = usage.left.toLocaleString("en-US");
-    searchesSub.textContent = "of " + usage.per_month + " this month · ~" + active.length * 30 + " needed";
+    searches.replaceChildren(usage.left.toLocaleString("en-US") + " ", el("small", null, "/ " + usage.per_month));
+    searchesSub.textContent = "~" + active.length * 30 + " needed a month";
     meter.style.width = Math.max(0, Math.min(100, (usage.left / usage.per_month) * 100)) + "%";
     meter.classList.toggle("low", usage.left < usage.per_month * 0.2);
   }
@@ -197,24 +204,103 @@ function renderSummary() {
 
 function renderGreeting() {
   const hour = new Date().getHours();
-  const part = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
-  document.getElementById("greeting").textContent = part + " ✈️";
+  document.getElementById("greeting").textContent = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+}
+
+// Date and time in Eastern, like the price checks.
+function renderClock() {
+  const now = new Date();
+  const zone = { timeZone: "America/New_York" };
+  const clock = document.getElementById("clock");
+  clock.replaceChildren(
+    now.toLocaleDateString("en-US", { ...zone, weekday: "short", month: "short", day: "numeric", year: "numeric" }),
+    el("br"),
+    now.toLocaleTimeString("en-US", { ...zone, hour: "numeric", minute: "2-digit" }) + " ET",
+  );
 }
 
 function renderCountdown() {
   if (!state.next_check) return;
   const minutes = Math.max(0, Math.round((new Date(state.next_check) - Date.now()) / 60000));
   const hours = Math.floor(minutes / 60);
-  document.getElementById("sum-next").textContent = hours ? "in " + hours + "h " + (minutes % 60) + "m" : "in " + minutes + "m";
+  document.getElementById("sum-next").textContent = hours ? hours + "h " + (minutes % 60) + "m" : minutes + "m";
+  const day = state.next_check.slice(0, 10) === state.today ? "Today" : "Tomorrow";
+  document.getElementById("sum-next-sub").textContent = day + " at 7:00 AM ET";
 }
-setInterval(renderCountdown, 30000);
+setInterval(() => { renderCountdown(); renderClock(); }, 30000);
 
 // ---------------------------------------------------------------------------------
-// Trip cards
+// Pictures: a photo of each city (from Wikipedia) and airline logos
+// ---------------------------------------------------------------------------------
+
+const photoCache = {};  // airport code -> Promise of a photo address, or null
+
+function cityPhoto(code) {
+  if (!(code in photoCache)) {
+    const airport = AIRPORT_BY_CODE[code];
+    let saved;
+    try { saved = localStorage.getItem("photo:" + code); } catch (err) { /* storage blocked */ }
+    if (saved !== null && saved !== undefined) {
+      photoCache[code] = Promise.resolve(saved || null);
+    } else if (!airport) {
+      photoCache[code] = Promise.resolve(null);
+    } else {
+      photoCache[code] = fetch("https://en.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(airport.city))
+        .then((r) => (r.ok ? r.json() : {}))
+        .then((page) => {
+          const url = page.type === "standard" && page.thumbnail ? page.thumbnail.source : "";
+          try { localStorage.setItem("photo:" + code, url); } catch (err) { /* storage blocked */ }
+          return url || null;
+        })
+        .catch(() => null);
+    }
+  }
+  return photoCache[code];
+}
+
+// Put a city photo into an <img>; it stays hidden when there isn't one.
+function showCityPhoto(img, code, fallback) {
+  img.hidden = true;
+  cityPhoto(code).then((url) => {
+    if (!url) return;
+    img.onload = () => { img.hidden = false; if (fallback) fallback.remove(); };
+    img.src = url;
+    const airport = AIRPORT_BY_CODE[code];
+    img.alt = airport ? airport.city : code;
+    img.title = "Photo: Wikipedia";
+  });
+}
+
+// Airline codes for logos when a saved option has no logo address.
+const AIRLINE_CODES = {
+  "Lufthansa": "LH", "Turkish Airlines": "TK", "Qatar Airways": "QR", "Etihad": "EY", "Emirates": "EK",
+  "Virgin Atlantic": "VS", "British Airways": "BA", "Air France": "AF", "KLM": "KL", "Air India": "AI",
+  "IndiGo": "6E", "Air Canada": "AC", "SWISS": "LX", "Delta": "DL", "United": "UA", "American": "AA",
+  "Southwest": "WN", "JetBlue": "B6", "Spirit": "NK", "Frontier": "F9", "Alaska": "AS", "Saudia": "SV",
+  "Gulf Air": "GF", "Kuwait Airways": "KU", "Oman Air": "WY", "Singapore Airlines": "SQ", "Vistara": "UK",
+};
+
+function airlineLogo(option) {
+  const first = (option.airline || "").split(",")[0].trim();
+  const code = AIRLINE_CODES[first];
+  const url = option.logo || (code ? "https://www.gstatic.com/flights/airline_logos/70px/" + code + ".png" : null);
+  const initials = el("span", "logo initials", first ? first.split(" ").map((w) => w[0]).join("").slice(0, 2) : "✈");
+  initials.setAttribute("aria-hidden", "true");
+  if (!url) return initials;
+  const img = el("img", "logo");
+  img.alt = "";
+  img.loading = "lazy";
+  img.src = url;
+  img.onerror = () => img.replaceWith(initials);
+  return img;
+}
+
+// ---------------------------------------------------------------------------------
+// Trips: one row each, with the details on the left and the top 5 on the right
 // ---------------------------------------------------------------------------------
 
 function renderTrips() {
-  const container = document.getElementById("trips");
+  const container = document.getElementById("trip-list");
   container.replaceChildren();
   const trips = groupTrips(state.routes);
   document.getElementById("sort-box").hidden = trips.length < 2;
@@ -229,7 +315,7 @@ function renderTrips() {
     container.append(empty);
     return;
   }
-  for (const trip of trips) container.append(tripCard(trip));
+  for (const trip of trips) container.append(tripRow(trip));
 }
 
 const sortSelect = document.getElementById("sort");
@@ -241,20 +327,22 @@ sortSelect.addEventListener("change", () => {
   renderTrips();
 });
 
-// Each trip keeps the same colour, based on its route (not its position).
-function tripColour(key) {
-  let hash = 0;
-  for (const ch of key) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
-  return "accent-" + (hash % 5);
-}
-
-function tripCard(trip) {
+function tripRow(trip) {
   const first = trip.dates[0];
-  const card = el("section", "panel trip " + tripColour(trip.key));
+  const row = el("div", "trip-row");
+  const card = el("section", "panel trip stripe");
+  const side = el("aside", "panel opts stripe");
+  row.append(card, side);
 
-  // Heading: ATL → BOM, city names, and tags
+  // Heading: photo, ATL → BOM, city names, note, tags and buttons
   const head = el("div", "trip-head");
-  const titleBox = el("div");
+  const placeholder = el("div", "trip-photo", "🌍");
+  placeholder.setAttribute("aria-hidden", "true");
+  const photo = el("img", "trip-photo");
+  head.append(placeholder, photo);
+  showCityPhoto(photo, first.destination, placeholder);
+
+  const titleBox = el("div", "trip-name");
   const title = el("div", "trip-title");
   title.append(first.origin, el("span", "arrow", "→"), first.destination);
   titleBox.append(title);
@@ -279,14 +367,15 @@ function tripCard(trip) {
   if (!trip.active) tags.append(el("span", "tag", "Finished"));
   titleBox.append(tags);
   head.append(titleBox);
+
   const buttons = el("div", "head-buttons");
   if (trip.active) {
-    const edit = el("button", "ghost small-btn", "✏️ Edit trip");
+    const edit = el("button", "outline", "✏️ Edit trip");
     edit.type = "button";
     edit.addEventListener("click", () => openEditForm(trip));
     buttons.append(edit);
   }
-  const deleteTrip = el("button", "ghost small-btn remove", "🗑 Delete trip");
+  const deleteTrip = el("button", "outline remove", "🗑 Delete trip");
   deleteTrip.type = "button";
   deleteTrip.addEventListener("click", () => removeTrip(trip));
   buttons.append(deleteTrip);
@@ -298,19 +387,19 @@ function tripCard(trip) {
   selectedDate[trip.key] = chosen.id;
 
   const detailBox = el("div");
-  const showDetail = () => detailBox.replaceChildren(dateDetail(chosen, trip));
-
-  if (trip.dates.length > 1) {
-    card.append(dateTable(trip, chosen, (route) => {
-      chosen = route;
-      selectedDate[trip.key] = route.id;
-      card.querySelectorAll(".date-table tbody tr").forEach((tr) => tr.classList.toggle("selected", tr.dataset.id === String(route.id)));
-      showDetail();
-    }));
-  }
+  const show = () => {
+    detailBox.replaceChildren(dateDetail(chosen, trip));
+    side.replaceChildren(...optionsSection(chosen, trip));
+  };
+  card.append(dateTable(trip, chosen, (route) => {
+    chosen = route;
+    selectedDate[trip.key] = route.id;
+    card.querySelectorAll(".date-table tbody tr").forEach((tr) => tr.classList.toggle("selected", tr.dataset.id === String(route.id)));
+    show();
+  }));
   card.append(detailBox);
-  showDetail();
-  return card;
+  show();
+  return row;
 }
 
 function cheapestDate(trip) {
@@ -324,10 +413,11 @@ function tripDates(route) {
 }
 
 function dateTable(trip, chosen, onSelect) {
-  const cheapest = cheapestDate(trip);
+  const cheapest = trip.dates.length > 1 ? cheapestDate(trip) : null;
+  const box = el("div", "date-box");
   const table = el("table", "date-table");
   const head = el("tr");
-  [["Dates"], ["Price"], ["Change", "hide-sm"], ["Trend"]].forEach(([h, cls]) => head.append(el("th", cls, h)));
+  [["Dates"], ["Price"], ["Change", "hide-sm"], ["Trend"], [""]].forEach(([h, cls]) => head.append(el("th", cls, h)));
   const thead = el("thead");
   thead.append(head);
   table.append(thead);
@@ -338,18 +428,18 @@ function dateTable(trip, chosen, onSelect) {
     row.tabIndex = 0;
     row.setAttribute("aria-label", "Show " + tripDates(route));
 
-    const dates = el("td");
+    const dates = el("td", "dates-cell");
+    if (cheapest && route.id === cheapest.id) dates.append(el("span", "pill cheap", "Cheapest date"));
+    if (!route.active) dates.append(el("span", "pill", "Finished"));
     dates.append(tripDates(route));
-    if (cheapest && route.id === cheapest.id) dates.append(el("span", "best", "CHEAPEST"));
-    if (!route.active) dates.append(el("span", "best", "FINISHED"));
 
     const point = latest(route);
     const price = el("td", "price-cell", point ? money(point.price) : "–");
     const change = el("td", "hide-sm");
     if (route.history.length > 1) {
       const diff = point.price - route.history[0].price;
-      change.textContent = diff === 0 ? "No change" : (diff < 0 ? "▼ " : "▲ ") + money(Math.abs(diff));
-      change.className = "hide-sm " + (diff < 0 ? "down" : diff > 0 ? "up" : "");
+      change.textContent = diff === 0 ? "— No change" : changeText(diff);
+      change.className = "hide-sm " + (changeClass(diff) || "muted");
     } else {
       change.textContent = "New";
       change.className = "hide-sm muted";
@@ -357,7 +447,7 @@ function dateTable(trip, chosen, onSelect) {
     const trend = el("td", "spark-cell");
     trend.append(sparkline(route));
 
-    row.append(dates, price, change, trend);
+    row.append(dates, price, change, trend, el("td", "chev", "›"));
     row.addEventListener("click", () => onSelect(route));
     row.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(route); }
@@ -365,30 +455,30 @@ function dateTable(trip, chosen, onSelect) {
     body.append(row);
   }
   table.append(body);
-  return table;
+  box.append(table);
+  return box;
 }
 
 function dateDetail(route, trip) {
-  const box = el("div", "detail");
   const point = latest(route);
+  const box = el("div", "detail");
 
   if (!point) {
+    box.classList.add("waiting");
     box.append(el("p", "muted", route.last_error ? "Couldn't get a price: " + route.last_error : "Waiting for the first price."));
     box.append(cardFoot(route, trip));
     return box;
   }
 
-  // Big price, Google's rating and key facts
-  const top = el("div", "detail-top");
+  // 1. The price, with Google's rating (or "lowest so far") and the Book button
   const main = el("div");
-  const hero = el("div", "hero-price", money(point.price));
+  const lowest = route.history.reduce((a, b) => (b.price < a.price ? b : a));
   const badge = levelBadge(point.price_level);
-  if (badge) hero.append(badge);
-  main.append(hero);
-  const subParts = [tripDates(route)];
-  if (point.airline) subParts.push(point.airline);
-  if (point.typical_low != null) subParts.push("Typical " + money(point.typical_low) + "–" + money(point.typical_high));
-  main.append(el("div", "hero-sub", subParts.join(" · ")));
+  if (badge) main.append(badge);
+  else if (route.history.length > 1 && point.price <= lowest.price) main.append(el("span", "pill cheap", "Lowest so far"));
+  main.append(el("div", "hero-price", money(point.price)));
+  main.append(el("div", "hero-when", [tripDates(route), point.airline].filter(Boolean).join(" · ")));
+  if (point.typical_low != null) main.append(el("div", "hero-sub", "Typical " + money(point.typical_low) + "–" + money(point.typical_high)));
   main.append(el("div", "hero-sub", "Checked " + shortDate(point.checked_on) + ", " + checkTime(point.checked_at)));
   if (route.active) {
     const book = el("a", "book", "Book on Google Flights ↗");
@@ -397,8 +487,8 @@ function dateDetail(route, trip) {
     book.rel = "noopener";
     main.append(book);
   }
-  top.append(main);
 
+  // 2. Key facts
   const facts = el("div", "facts");
   const fact = (label, value, cls) => {
     const f = el("div");
@@ -407,66 +497,67 @@ function dateDetail(route, trip) {
   };
   if (route.history.length > 1) {
     const diff = point.price - route.history[0].price;
-    const lowest = route.history.reduce((a, b) => (b.price < a.price ? b : a));
-    fact("Since first check", changeText(diff), changeClass(diff));
+    fact("Since first check", diff === 0 ? "↔ No change" : changeText(diff), changeClass(diff));
+    fact("Lowest seen", "🏆 " + money(lowest.price) + " · " + shortDate(lowest.checked_on));
     const week = weekChange(route);
-    if (week != null) fact("Last 7 days", changeText(week), changeClass(week));
-    fact("Lowest seen", money(lowest.price) + " · " + shortDate(lowest.checked_on));
+    if (week != null) fact("Last 7 days", week === 0 ? "↔ No change" : changeText(week), changeClass(week));
+    else fact("Last 7 days", "From " + shortDate(addDays(route.history[0].checked_on, 7)), "soon");
   }
   const daysLeft = daysBetween(state.today, route.depart_date);
-  fact("Departs", daysLeft > 0 ? "in " + daysLeft + " days" : daysLeft === 0 ? "today" : "departed");
-  top.append(facts);
-  box.append(top);
+  fact("Departs", "📅 " + (daysLeft > 0 ? "in " + daysLeft + " days" : daysLeft === 0 ? "today" : "departed"));
 
-  if (route.last_error) box.append(el("p", "error", "Latest check failed: " + route.last_error));
+  // 3. Price trend
+  const trend = el("div", "trend");
+  trend.append(el("h3", null, "Price trend"));
+  if (route.history.length > 1 || route.google_history.length > 1) {
+    const from = route.google_history.length ? route.google_history[0][0] : route.history[0].checked_on;
+    trend.append(el("div", "trend-sub", "From " + longDate(from) + " to " + longDate(point.checked_on)));
+    trend.append(chartSection(route, point));
+  } else if (point.typical_low != null) {
+    trend.append(rangeView(point));
+  } else {
+    trend.append(el("p", "muted small", "The chart starts after the next morning check."));
+  }
 
-  // Chart, or the first-day range view
-  if (route.history.length > 1 || route.google_history.length > 1) box.append(chartSection(route, point));
-  else if (point.typical_low != null) box.append(rangeView(point));
-  else box.append(el("p", "muted small", "The chart starts after the next morning check."));
-
-  box.append(optionsSection(route, point));
-  box.append(cardFoot(route, trip));
-  return box;
+  box.append(main, facts, trend);
+  const wrap = el("div");
+  if (route.last_error) wrap.append(el("p", "error", "Latest check failed: " + route.last_error));
+  wrap.append(box, cardFoot(route, trip));
+  return wrap;
 }
 
-// The cheapest few flights from the latest check.
-function optionsSection(route, point) {
-  const box = el("div", "options");
-  const head = el("div", "options-head");
-  const when = point.checked_on === state.today ? "today" : shortDate(point.checked_on);
-  head.append(el("h3", null, "Top " + (route.options.length || 5) + " options"));
-  head.append(el("span", "muted small", "From the check " + when + " at " + checkTime(point.checked_at) + " · nonstop or 1 stop"));
-  box.append(head);
-
-  if (!route.options.length) {
-    box.append(el("p", "muted small", "Options appear after the next check."));
-    return box;
-  }
+// The cheapest few flights from the latest check, for the right-hand column.
+function optionsSection(route, trip) {
+  const point = latest(route);
+  const heading = el("h3", null, "Top " + (route.options.length || 5) + " options");
+  if (!point) return [heading, el("p", "muted small", "Options appear after the first price check.")];
+  const when = point.checked_on === state.today ? "today's check" : "the check on " + shortDate(point.checked_on);
+  const sub = el("div", "opts-sub", "From " + when + " at " + checkTime(point.checked_at) + " · Nonstop or 1 stop");
+  if (!route.options.length) return [heading, sub, el("p", "muted small", "Options appear after the next check.")];
 
   const cheapest = route.options[0];
   const value = bestValue(route.options);
-  const scroll = el("div", "table-scroll");
-  const table = el("table", "opt-table");
-  const headRow = el("tr");
-  [["Airline"], ["Stops"], ["Travel time"], ["Departs"], ["Price", "r"]].forEach(([h, cls]) => headRow.append(el("th", cls, h)));
-  table.append(headRow);
+  const list = el("div", "opt-list");
   for (const o of route.options) {
-    const row = el("tr", o === cheapest || o === value ? "hl" : "");
-    const name = el("td", null, o.airline || "—");
-    if (o === cheapest) name.append(el("span", "pill cheap", "CHEAPEST"));
-    if (o === value) name.append(el("span", "pill value", "BEST VALUE"));
-    const stops = el("td", null, o.stops ? String(o.stops) : "Nonstop");
-    if (o.via && o.via.length) stops.append(el("span", "via", " · " + o.via.join(", ")));
-    const price = el("td", "r price", money(o.price));
-    if (o !== cheapest) price.append(el("span", "extra", " +" + money(o.price - cheapest.price)));
-    row.append(name, stops, el("td", null, duration(o.minutes)), el("td", null, clockTime(o.depart)), price);
-    table.append(row);
+    const row = el("div", "opt" + (o === cheapest || o === value ? " hl" : ""));
+    const info = el("div");
+    const name = el("div", "opt-name", o.airline || "—");
+    if (o === cheapest) name.append(el("span", "pill cheap", "Lowest fare"));
+    if (o === value) name.append(el("span", "pill value", "Best value"));
+    const stops = o.stops ? o.stops + (o.stops === 1 ? " stop" : " stops") : "Nonstop";
+    info.append(name, el("div", "opt-info", [stops].concat(o.via || [], duration(o.minutes)).join(" · ")));
+    info.append(el("div", "opt-info", "Departs " + clockTime(o.depart)));
+    const price = el("div", "opt-price", money(o.price));
+    price.append(o === cheapest
+      ? el("div", "opt-extra zero", "Cheapest")
+      : el("div", "opt-extra", "+" + money(o.price - cheapest.price)));
+    row.append(airlineLogo(o), info, price);
+    list.append(row);
   }
-  scroll.append(table);
-  box.append(scroll);
-  if (value) box.append(el("p", "muted small", "Best value: at least 3 hours faster than the cheapest, for no more than $75 extra."));
-  return box;
+  const parts = [heading, sub, list];
+  if (value) parts.push(el("p", "opts-foot", "Best value: at least 3 hours faster than the cheapest, for no more than $75 extra."));
+  if (trip.dates.length > 1) parts.push(el("p", "opts-foot", "For " + tripDates(route) + ". Pick another date on the left to see its options."));
+  return parts;
 }
 
 // Same rule as best_value() in prices.py.

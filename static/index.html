@@ -5,43 +5,62 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Flight Tracker</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✈️</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="topbar-inner">
-      <div class="brand">
-        <span class="brand-mark" aria-hidden="true">✈</span>
-        <span>Flight Tracker</span>
+  <header class="header">
+    <svg class="flightpath" viewBox="0 0 520 200" aria-hidden="true"><path d="M10 170 C 150 40, 330 10, 480 70" fill="none" stroke="var(--path)" stroke-width="2.5" stroke-dasharray="3 9" stroke-linecap="round"/><circle cx="10" cy="170" r="6" fill="var(--path)"/><text x="470" y="80" font-size="30" transform="rotate(20 470 70)">✈️</text></svg>
+    <div class="wrap">
+      <div class="nav">
+        <div class="brand"><span class="brand-mark" aria-hidden="true">✈</span><span>Flight Tracker</span></div>
+        <div class="clock" id="clock"></div>
       </div>
+      <div class="banner" id="demo-banner" hidden>
+        <strong>Demo mode:</strong> prices are made up. Add a SerpApi key to get real Google Flights prices.
+      </div>
+      <div class="hello">
+        <h1><span id="greeting">Hello</span> ✈️</h1>
+        <p>Here's how your flight prices look today.</p>
+      </div>
+      <section class="summary" id="summary" aria-label="Summary">
+        <div class="tile best">
+          <div class="best-text">
+            <span class="pill cheap">Best deal now</span>
+            <div class="tile-value" id="sum-best">–</div>
+            <div class="tile-sub" id="sum-best-sub"></div>
+            <div class="best-badge" id="sum-best-badge" hidden>🏆 Lowest price tracked</div>
+          </div>
+          <img class="best-photo" id="sum-best-photo" alt="" hidden>
+        </div>
+        <div class="tile t-blue">
+          <div class="tile-label"><span class="tile-icon" aria-hidden="true">🧳</span>Tracking</div>
+          <div class="tile-value" id="sum-tracking">–</div>
+          <div class="tile-sub" id="sum-tracking-sub"></div>
+          <a class="tile-link" href="#trips">View trips →</a>
+        </div>
+        <div class="tile t-violet">
+          <div class="tile-label"><span class="tile-icon" aria-hidden="true">⏰</span>Next price check</div>
+          <div class="tile-value" id="sum-next">–</div>
+          <div class="tile-sub" id="sum-next-sub">Every day at 7:00 AM ET</div>
+        </div>
+        <div class="tile t-teal">
+          <div class="tile-label"><span class="tile-icon" aria-hidden="true">🔎</span>Searches left</div>
+          <div class="tile-value" id="sum-searches">–</div>
+          <div class="tile-sub" id="sum-searches-sub"></div>
+          <div class="meter" aria-hidden="true"><div class="meter-fill" id="sum-meter"></div></div>
+        </div>
+      </section>
     </div>
   </header>
 
-  <main>
-    <div class="banner" id="demo-banner" hidden>
-      <strong>Demo mode:</strong> prices are made up. Add a SerpApi key to get real Google Flights prices.
-    </div>
-
-    <!-- Colourful header with the summary tiles -->
-    <section class="hero" aria-label="Summary">
-      <div class="hero-text">
-        <div class="hero-greeting" id="greeting">Hello!</div>
-        <div class="hero-title">Here's how your flight prices look today</div>
-      </div>
-      <div class="summary" id="summary">
-      <div class="tile"><span class="tile-icon t-blue" aria-hidden="true">🧳</span><div class="tile-label">Tracking</div><div class="tile-value" id="sum-tracking">–</div><div class="tile-sub" id="sum-tracking-sub"></div></div>
-      <div class="tile"><span class="tile-icon t-green" aria-hidden="true">💰</span><div class="tile-label">Best deal now</div><div class="tile-value" id="sum-best">–</div><div class="tile-sub" id="sum-best-sub"></div></div>
-      <div class="tile"><span class="tile-icon t-orange" aria-hidden="true">⏰</span><div class="tile-label">Next price check</div><div class="tile-value" id="sum-next">–</div><div class="tile-sub" id="sum-next-sub">Every day at 7:00 AM Eastern</div></div>
-      <div class="tile"><span class="tile-icon t-violet" aria-hidden="true">🔎</span><div class="tile-label">Searches left</div><div class="tile-value" id="sum-searches">–</div>
-        <div class="meter" aria-hidden="true"><div class="meter-fill" id="sum-meter"></div></div>
-        <div class="tile-sub" id="sum-searches-sub"></div></div>
-      </div>
-    </section>
-
+  <main class="wrap" id="trips">
     <div class="section-head">
-      <h1>Your trips</h1>
+      <h2>Your trips</h2>
       <div class="head-right">
-        <label class="sort-box" id="sort-box" hidden>Sort
+        <label class="sort-box" id="sort-box" hidden><span class="muted small">Sort</span>
           <select id="sort">
             <option value="soonest">Soonest departure</option>
             <option value="cheapest">Cheapest</option>
@@ -108,7 +127,7 @@
       </form>
     </section>
 
-    <div id="trips" aria-live="polite">
+    <div id="trip-list" aria-live="polite">
       <div class="panel skeleton">Loading your trips…</div>
     </div>
   </main>
