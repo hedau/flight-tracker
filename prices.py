@@ -17,11 +17,13 @@ import urllib.request
 from zoneinfo import ZoneInfo
 
 import db
+import notify
 
 SERPAPI_KEY = os.environ.get("SERPAPI_KEY", "")
 CURRENCY = "USD"
 TIMEZONE = ZoneInfo("America/New_York")
 MORNING_HOUR = 7  # the scheduled check runs from 7 AM Eastern Time
+TOP_OPTIONS = 5   # how many of the cheapest flights to keep from each check
 AIRLINE_CODE = re.compile(r"^[A-Z0-9]{2}$")  # e.g. DL, B6
 
 # Names for common airline codes, used in demo mode and for routes saved
@@ -73,6 +75,7 @@ def serpapi_search(route):
         "outbound_date": route["depart_date"],
         "type": "1" if route["trip_type"] == "round_trip" else "2",
         "currency": CURRENCY,
+        "stops": "2",  # Google Flights: 2 = nonstop or 1 stop only
         "hl": "en",
         "api_key": SERPAPI_KEY,
     }
@@ -104,9 +107,11 @@ def serpapi_price(route):
         }.items()),
     }
     if priced:
-        cheapest = min(priced, key=lambda f: f["price"])
+        priced.sort(key=lambda f: f["price"])
+        cheapest = priced[0]
         legs = cheapest.get("flights") or [{}]
         result.update(price=int(round(cheapest["price"])), airline=legs[0].get("airline"))
+        result["options"] = [flight_option(f) for f in priced[:TOP_OPTIONS]]
         return result
     if insights.get("lowest_price"):
         result["price"] = int(insights["lowest_price"])
@@ -114,6 +119,50 @@ def serpapi_price(route):
     if route.get("airlines"):
         raise RuntimeError("No flights found on the chosen airlines for this route and date")
     raise RuntimeError("No flights found for this route and date")
+
+
+def flight_option(flight):
+    """One Google Flights result boiled down to what the dashboard shows.
+
+    Returns {"airline": "Lufthansa, United", "stops": 1, "via": ["FRA"],
+    "minutes": 1325, "depart": "16:30", "price": 1171}.
+    """
+    legs = flight.get("flights") or [{}]
+    airlines = []
+    for leg in legs:
+        name = leg.get("airline")
+        if name and name not in airlines:
+            airlines.append(name)
+    layovers = flight.get("layovers") or []
+    # Departure time looks like "2026-12-30 16:30"; keep the "16:30" part.
+    depart = (legs[0].get("departure_airport") or {}).get("time") or ""
+    return {
+        "airline": ", ".join(airlines) or None,
+        "stops": len(layovers),
+        "via": [stop["id"] for stop in layovers if stop.get("id")],
+        "minutes": flight.get("total_duration"),
+        "depart": depart[-5:] or None,
+        "price": int(round(flight["price"])),
+    }
+
+
+def best_value(options):
+    """A flight worth the extra money: much faster than the cheapest, for a little more.
+
+    At least 3 hours quicker and no more than $75 dearer; the cheapest such
+    flight wins. Returns None when there isn't one. (static/app.js has the
+    same rule for the dashboard.)
+    """
+    if not options or options[0].get("minutes") is None:
+        return None
+    cheapest = options[0]
+    faster = [
+        o for o in options[1:]
+        if o.get("minutes") is not None
+        and o["minutes"] <= cheapest["minutes"] - 180
+        and o["price"] <= cheapest["price"] + 75
+    ]
+    return min(faster, key=lambda o: o["price"]) if faster else None
 
 
 def demo_price(route):
@@ -134,9 +183,23 @@ def demo_price(route):
     for days_ago in range(60, 0, -1):
         level = max(base * 0.7, level + walk.uniform(-0.04, 0.035) * base)
         history.append(((today - datetime.timedelta(days=days_ago)).isoformat(), int(level)))
+
+    # A few made-up flights around the cheapest price.
+    hubs = ["ORD", "JFK", "DFW", "CLT", "DEN"]
+    options, minutes = [], rng.randint(300, 900)
+    for i in range(TOP_OPTIONS):
+        options.append({
+            "airline": airline if i == 0 else KNOWN_AIRLINES.get(rng.choice(codes), "Demo Air"),
+            "stops": 0 if i == 4 else 1,
+            "via": [] if i == 4 else [rng.choice(hubs)],
+            "minutes": minutes if i == 0 else minutes - rng.randint(-60, 240),
+            "depart": "%02d:%02d" % (rng.randint(6, 21), rng.choice([0, 15, 30, 45])),
+            "price": price + i * rng.randint(5, 60),
+        })
     return {
         "price": price,
         "airline": airline,
+        "options": options,
         "level": "low" if price < low else "high" if price > high else "typical",
         "typical_low": low,
         "typical_high": high,
@@ -193,19 +256,43 @@ def _get_json(url):
 # --- Checking routes ------------------------------------------------------------
 
 def check_route(route):
-    """Look up today's price for one route and save it (or the error)."""
+    """Look up today's price for one route and save it (or the error).
+
+    Returns what the emails need: the price, the previous check's price,
+    and whether it beats every earlier check (a new lowest).
+    """
+    today = today_eastern()
+    earlier = [p for p in db.prices_for(route["id"]) if p["checked_on"] < today and p["price"] is not None]
     result, error = {}, None
     try:
         result = fetch_price(route)
     except RuntimeError as err:
         error = str(err)
     db.save_price(
-        route["id"], today_eastern(), now_eastern().isoformat(timespec="seconds"),
+        route["id"], today, now_eastern().isoformat(timespec="seconds"),
         result, "demo" if demo_mode() else "serpapi", error,
     )
     if result.get("history"):
         db.save_google_history(route["id"], json.dumps(result["history"]))
-    return {"route_id": route["id"], "price": result.get("price"), "error": error}
+
+    price = result.get("price")
+    lowest = min(earlier, key=lambda p: p["price"]) if earlier else None
+    return {
+        "route_id": route["id"],
+        "route": {k: route[k] for k in ("origin", "destination", "trip_type", "depart_date", "return_date")},
+        "price": price,
+        "error": error,
+        "airline": result.get("airline"),
+        "level": result.get("level"),
+        "typical_low": result.get("typical_low"),
+        "typical_high": result.get("typical_high"),
+        "options": result.get("options") or [],
+        "previous_price": earlier[-1]["price"] if earlier else None,
+        "previous_lowest": lowest["price"] if lowest else None,
+        "previous_lowest_on": lowest["checked_on"] if lowest else None,
+        # Not on a route's first check: there's nothing to beat yet.
+        "new_lowest": price is not None and lowest is not None and price < lowest["price"],
+    }
 
 
 def run_daily_check(scheduled=False):
@@ -229,7 +316,16 @@ def run_daily_check(scheduled=False):
             already_done += 1
         else:
             checked.append(check_route(route))
-    return {"checked": checked, "already_done": already_done, "finished": finished}
+
+    # Email only when something was checked, so the second alarm of the
+    # morning (which finds everything done) doesn't send a duplicate.
+    emails = []
+    if checked:
+        try:
+            emails = notify.send_check_emails(checked, now)
+        except Exception as err:  # the prices are saved either way
+            emails = ["Email failed: %s" % err]
+    return {"checked": checked, "already_done": already_done, "finished": finished, "emails": emails}
 
 
 def next_check():

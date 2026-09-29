@@ -8,6 +8,7 @@ Queries are written with "?" placeholders; for PostgreSQL they are
 rewritten to "%s", which is what the psycopg library expects.
 """
 
+import json
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -56,6 +57,7 @@ ADDED_COLUMNS = [
     ("prices", "price_level", "TEXT"),
     ("prices", "typical_low", "INTEGER"),
     ("prices", "typical_high", "INTEGER"),
+    ("prices", "options", "TEXT"),  # the top flights as JSON
 ]
 
 
@@ -167,19 +169,21 @@ def has_price_for(route_id, checked_on):
 def save_price(route_id, checked_on, checked_at, result, source, error):
     """Store one price per route per day. Checking again the same day replaces it.
 
-    result holds price, airline, level ("low"/"typical"/"high") and the
-    typical_low/typical_high range that Google Flights reports.
+    result holds price, airline, level ("low"/"typical"/"high"), the
+    typical_low/typical_high range that Google Flights reports, and options
+    (the cheapest few flights).
     """
+    options = json.dumps(result["options"]) if result.get("options") else None
     execute(
         "INSERT INTO prices (route_id, checked_on, checked_at, price, airline, source, error,"
-        " price_level, typical_low, typical_high) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        " price_level, typical_low, typical_high, options) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         " ON CONFLICT (route_id, checked_on) DO UPDATE SET"
         " checked_at = excluded.checked_at, price = excluded.price,"
         " airline = excluded.airline, source = excluded.source, error = excluded.error,"
         " price_level = excluded.price_level, typical_low = excluded.typical_low,"
-        " typical_high = excluded.typical_high",
+        " typical_high = excluded.typical_high, options = excluded.options",
         (route_id, checked_on, checked_at, result.get("price"), result.get("airline"), source, error,
-         result.get("level"), result.get("typical_low"), result.get("typical_high")),
+         result.get("level"), result.get("typical_low"), result.get("typical_high"), options),
     )
 
 
@@ -190,7 +194,7 @@ def save_google_history(route_id, history_json):
 def prices_for(route_id):
     return query(
         "SELECT checked_on, checked_at, price, airline, source, error,"
-        " price_level, typical_low, typical_high"
+        " price_level, typical_low, typical_high, options"
         " FROM prices WHERE route_id = ? ORDER BY checked_on",
         (route_id,),
     )

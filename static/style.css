@@ -347,3 +347,21 @@ body { background: var(--page) fixed, var(--bg); min-height: 100vh; }
 .form-panel { position: relative; overflow: hidden; }
 .form-panel::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 5px; background: var(--button); }
 .trip .range-view { background: color-mix(in srgb, var(--series) 7%, var(--surface-2)); }
+
+/* ---------- Top flight options ---------- */
+.options { margin-top: 22px; }
+.options-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin-bottom: 6px; }
+.options-head h3 { font-size: 15px; margin: 0; }
+.options > p { margin: 6px 0 0; }
+.table-scroll { overflow-x: auto; }
+.opt-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 14px; }
+.opt-table th { text-align: left; font-size: 12px; color: var(--text-2); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 6px 10px; white-space: nowrap; }
+.opt-table td { padding: 9px 10px; border-top: 1px solid var(--grid); white-space: nowrap; }
+.opt-table .r { text-align: right; }
+.opt-table .price { font-weight: 700; }
+.opt-table .via, .opt-table .extra { color: var(--text-2); font-weight: normal; }
+.opt-table .extra { font-size: 12px; }
+.opt-table tr.hl td { background: var(--series-soft); }
+.pill { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: 0.03em; padding: 2px 8px; border-radius: 999px; margin-left: 8px; }
+.pill.cheap { background: var(--good-soft); color: var(--good); }
+.pill.value { background: var(--accent-soft); color: var(--accent); }

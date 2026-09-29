@@ -241,9 +241,14 @@ function tripCard(trip) {
   } else {
     tags.append(el("span", "tag", "Any airline"));
   }
+  tags.append(el("span", "tag", "Max 1 stop"));
   if (!trip.active) tags.append(el("span", "tag", "Finished"));
   titleBox.append(tags);
   head.append(titleBox);
+  const deleteTrip = el("button", "ghost small-btn remove", "🗑 Delete trip");
+  deleteTrip.type = "button";
+  deleteTrip.addEventListener("click", () => removeTrip(trip));
+  head.append(deleteTrip);
   card.append(head);
 
   // Which date is shown in detail (the cheapest, until you pick another)
@@ -369,17 +374,78 @@ function dateDetail(route, trip) {
   else if (point.typical_low != null) box.append(rangeView(point));
   else box.append(el("p", "muted small", "The chart starts after the next morning check."));
 
+  box.append(optionsSection(route, point));
   box.append(cardFoot(route, trip));
   return box;
+}
+
+// The cheapest few flights from the latest check.
+function optionsSection(route, point) {
+  const box = el("div", "options");
+  const head = el("div", "options-head");
+  const when = point.checked_on === state.today ? "today" : shortDate(point.checked_on);
+  head.append(el("h3", null, "Top " + (route.options.length || 5) + " options"));
+  head.append(el("span", "muted small", "From the check " + when + " at " + checkTime(point.checked_at) + " · nonstop or 1 stop"));
+  box.append(head);
+
+  if (!route.options.length) {
+    box.append(el("p", "muted small", "Options appear after the next check."));
+    return box;
+  }
+
+  const cheapest = route.options[0];
+  const value = bestValue(route.options);
+  const scroll = el("div", "table-scroll");
+  const table = el("table", "opt-table");
+  const headRow = el("tr");
+  [["Airline"], ["Stops"], ["Travel time"], ["Departs"], ["Price", "r"]].forEach(([h, cls]) => headRow.append(el("th", cls, h)));
+  table.append(headRow);
+  for (const o of route.options) {
+    const row = el("tr", o === cheapest || o === value ? "hl" : "");
+    const name = el("td", null, o.airline || "—");
+    if (o === cheapest) name.append(el("span", "pill cheap", "CHEAPEST"));
+    if (o === value) name.append(el("span", "pill value", "BEST VALUE"));
+    const stops = el("td", null, o.stops ? String(o.stops) : "Nonstop");
+    if (o.via && o.via.length) stops.append(el("span", "via", " · " + o.via.join(", ")));
+    const price = el("td", "r price", money(o.price));
+    if (o !== cheapest) price.append(el("span", "extra", " +" + money(o.price - cheapest.price)));
+    row.append(name, stops, el("td", null, duration(o.minutes)), el("td", null, clockTime(o.depart)), price);
+    table.append(row);
+  }
+  scroll.append(table);
+  box.append(scroll);
+  if (value) box.append(el("p", "muted small", "Best value: at least 3 hours faster than the cheapest, for no more than $75 extra."));
+  return box;
+}
+
+// Same rule as best_value() in prices.py.
+function bestValue(options) {
+  const cheapest = options[0];
+  if (!cheapest || cheapest.minutes == null) return null;
+  const faster = options.slice(1).filter((o) =>
+    o.minutes != null && o.minutes <= cheapest.minutes - 180 && o.price <= cheapest.price + 75);
+  return faster.length ? faster.reduce((a, b) => (b.price < a.price ? b : a)) : null;
+}
+
+const duration = (minutes) => (minutes == null ? "—" : Math.floor(minutes / 60) + "h " + String(minutes % 60).padStart(2, "0") + "m");
+
+// "16:30" -> "4:30 PM"
+function clockTime(hhmm) {
+  if (!hhmm) return "—";
+  const [h, m] = hhmm.split(":").map(Number);
+  return (h % 12 || 12) + ":" + String(m).padStart(2, "0") + (h < 12 ? " AM" : " PM");
 }
 
 function cardFoot(route, trip) {
   const foot = el("div", "card-foot");
   foot.append(route.history.length ? historyTable(route) : el("span"));
-  const remove = el("button", "ghost small-btn remove", trip.dates.length > 1 ? "Stop tracking these dates" : "Stop tracking");
-  remove.type = "button";
-  remove.addEventListener("click", () => removeRoute(route));
-  foot.append(remove);
+  // A single-date trip is deleted with the button at the top of its card.
+  if (trip.dates.length > 1) {
+    const remove = el("button", "ghost small-btn remove", "🗑 Delete these dates");
+    remove.type = "button";
+    remove.addEventListener("click", () => removeRoute(route));
+    foot.append(remove);
+  }
   return foot;
 }
 
@@ -664,6 +730,16 @@ async function removeRoute(route) {
   if (!confirm("Stop tracking " + name + " and delete its price history?")) return;
   await api("/api/routes/" + route.id, { method: "DELETE" });
   showToast("Stopped tracking " + name);
+  loadRoutes();
+}
+
+async function removeTrip(trip) {
+  const first = trip.dates[0];
+  const count = trip.dates.length;
+  const name = first.origin + " → " + first.destination + (count > 1 ? " (all " + count + " dates)" : " (" + tripDates(first) + ")");
+  if (!confirm("Delete " + name + " and its price history?")) return;
+  for (const route of trip.dates) await api("/api/routes/" + route.id, { method: "DELETE" });
+  showToast("Deleted " + name);
   loadRoutes();
 }
 

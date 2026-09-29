@@ -7,6 +7,8 @@ Settings come from environment variables (or a .env file on your Mac):
   SERPAPI_KEY         SerpApi key; leave empty for demo prices
   DATABASE_URL        PostgreSQL address; leave empty to use a local file
   CRON_SECRET         secret the morning alarm (GitHub Actions) must send
+  RESEND_API_KEY      Resend key for the morning emails; leave empty for no emails
+  ALERT_EMAIL         where the morning emails go
 """
 
 import os
@@ -161,7 +163,12 @@ def airline_names(route):
 def route_summary(route):
     history = db.prices_for(route["id"])
     known = [p for p in history if p["price"] is not None]
+    # Only the latest check's flight options are shown, so only those are sent.
+    options = json.loads(known[-1]["options"]) if known and known[-1].get("options") else []
+    for p in known:
+        p.pop("options", None)
     return {
+        "options": options,
         "id": route["id"],
         "origin": route["origin"],
         "destination": route["destination"],
