@@ -17,9 +17,11 @@ python3 app.py
 ```
 
 Then open http://localhost:8000. With no settings, it uses demo prices, saves to
-`flights.db` in this folder, and skips the login page.
+`flights.db` in this folder.
 
-To use real prices or a password, copy `.env.example` to `.env` and fill it in.
+The dashboard has no login: anyone with the link can see and change the trips.
+
+To use real prices, copy `.env.example` to `.env` and fill it in.
 `.env` holds your secrets and is never uploaded to GitHub.
 
 Using the Neon database from your Mac needs the `psycopg` package, installed in a
@@ -40,7 +42,7 @@ GitHub Actions  --7 AM ET-->  app on Render  --asks-->  SerpApi (Google Flights)
 
 | File | What it does |
 |---|---|
-| `app.py` | Web server: login, dashboard, adding/removing routes, the `/api/check` endpoint |
+| `app.py` | Web server: dashboard, adding/removing routes, the `/api/check` endpoint |
 | `prices.py` | Gets prices from SerpApi (or demo prices) and runs the daily check |
 | `db.py` | Saves routes and prices (SQLite on your Mac, PostgreSQL in the cloud) |
 | `static/` | The dashboard page, its styles, and the chart code |
@@ -57,7 +59,7 @@ You need three free accounts: **SerpApi**, **Neon** and **Render**.
    - Build command: `pip install -r requirements.txt`
    - Start command: `python3 app.py`
    - Instance type: Free
-   - Environment variables: `DASHBOARD_PASSWORD`, `SERPAPI_KEY`,
+   - Environment variables: `SERPAPI_KEY`,
      `DATABASE_URL` (from Neon) and `CRON_SECRET` (any long random text).
 4. **GitHub:** in this repository go to Settings > Secrets and variables >
    Actions and add:

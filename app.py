@@ -3,7 +3,6 @@
 Run locally:  python3 app.py   then open http://localhost:8000
 
 Settings come from environment variables (or a .env file on your Mac):
-  DASHBOARD_PASSWORD  password for the dashboard (required in the cloud)
   SERPAPI_KEY         SerpApi key; leave empty for demo prices
   DATABASE_URL        PostgreSQL address; leave empty to use a local file
   CRON_SECRET         secret the morning alarm (GitHub Actions) must send
@@ -30,15 +29,10 @@ def load_env_file(path=".env"):
 load_env_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 import datetime
-import hashlib
 import hmac
 import json
 import re
-import threading
-import time
-from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs
 
 import db
 import prices
@@ -46,49 +40,15 @@ import prices
 IN_CLOUD = "PORT" in os.environ
 PORT = int(os.environ.get("PORT", 8000))
 HOST = os.environ.get("HOST", "0.0.0.0" if IN_CLOUD else "127.0.0.1")
-PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
 CRON_SECRET = os.environ.get("CRON_SECRET", "").strip()  # ignore stray spaces from copy-paste
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 STATIC_TYPES = {".html": "text/html", ".css": "text/css", ".js": "text/javascript"}
 MAX_BODY_BYTES = 4000
-SESSION_DAYS = 30
 AIRPORT_CODE = re.compile(r"^[A-Z]{3}$")
 MAX_DATES = 5  # date pairs per "Start tracking" click; each uses 1 search a day
 MAX_AIRLINES = 20
-
-# Signing key for login cookies. It is derived from the password, so
-# changing the password logs everyone out.
-SESSION_KEY = hashlib.sha256(b"flight-tracker-session:" + PASSWORD.encode()).digest()
-
-failed_logins = []  # times of recent wrong passwords, to slow down guessing
-failed_lock = threading.Lock()
-
-
-# --- Login cookies ----------------------------------------------------------------
-
-def make_session():
-    expires = str(int(time.time()) + SESSION_DAYS * 86400)
-    signature = hmac.new(SESSION_KEY, expires.encode(), "sha256").hexdigest()
-    return expires + "." + signature
-
-
-def valid_session(token):
-    expires, _, signature = token.partition(".")
-    expected = hmac.new(SESSION_KEY, expires.encode(), "sha256").hexdigest()
-    return (
-        hmac.compare_digest(signature, expected)
-        and expires.isdigit()
-        and int(expires) > time.time()
-    )
-
-
-def too_many_failed_logins():
-    with failed_lock:
-        cutoff = time.time() - 15 * 60
-        failed_logins[:] = [t for t in failed_logins if t > cutoff]
-        return len(failed_logins) >= 10
-
+MAX_NOTE = 80
 
 # --- Checking what the user typed ---------------------------------------------------
 
@@ -153,6 +113,13 @@ def parse_routes(data):
     return routes
 
 
+def parse_note(data):
+    note = " ".join(str(data.get("note") or "").split())
+    if len(note) > MAX_NOTE:
+        raise ValueError("Keep the note under %d characters." % MAX_NOTE)
+    return note or None
+
+
 def airline_names(route):
     if route["airline_names"]:
         return route["airline_names"].split(",")
@@ -176,6 +143,8 @@ def route_summary(route):
         "depart_date": route["depart_date"],
         "return_date": route["return_date"],
         "airlines": airline_names(route),
+        "airline_codes": [c for c in (route["airlines"] or "").split(",") if c],
+        "note": route.get("note"),
         "active": bool(route["active"]),
         "history": known,
         "google_history": json.loads(route["google_history"]) if route["google_history"] else [],
@@ -196,13 +165,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/healthz":
             return self.send_json({"ok": True})
         if path == "/login":
-            return self.send_static("login.html")
+            return self.redirect("/")  # old bookmarks; there's no login any more
         if path == "/style.css":
             return self.send_static("style.css")
-        if not self.logged_in():
-            if path.startswith("/api/"):
-                return self.send_json({"error": "Please log in."}, 401)
-            return self.redirect("/login")
         if path == "/":
             return self.send_static("index.html")
         if path in ("/app.js", "/airports.js"):
@@ -214,7 +179,6 @@ class Handler(BaseHTTPRequestHandler):
                 "demo": prices.demo_mode(),
                 "today": prices.today_eastern(),
                 "currency": prices.CURRENCY,
-                "login_required": bool(PASSWORD),
                 "next_check": prices.next_check().isoformat(),
                 "max_dates": MAX_DATES,
             })
@@ -231,54 +195,24 @@ class Handler(BaseHTTPRequestHandler):
         if body is None:
             return
 
-        if path == "/login":
-            return self.handle_login(body)
         if path == "/api/check":
             return self.handle_scheduled_check()
-        if not self.logged_in():
-            return self.send_json({"error": "Please log in."}, 401)
-        if path == "/logout":
-            self.send_response(303)
-            self.send_header("Set-Cookie", "session=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict")
-            self.send_header("Location", "/login")
-            self.end_headers()
-            return
         if path == "/api/routes":
             return self.handle_add_route(body)
+        if path == "/api/routes/edit":
+            return self.handle_edit_trip(body)
         if path == "/api/airlines":
             return self.handle_find_airlines(body)
         self.send_json({"error": "Not found"}, 404)
 
     def do_DELETE(self):
         match = re.fullmatch(r"/api/routes/(\d+)", self.path)
-        if not self.logged_in():
-            return self.send_json({"error": "Please log in."}, 401)
         if not match:
             return self.send_json({"error": "Not found"}, 404)
         db.delete_route(int(match.group(1)))
         self.send_json({"ok": True})
 
     # --- Actions ---
-
-    def handle_login(self, body):
-        if too_many_failed_logins():
-            return self.redirect("/login?error=wait")
-        password = parse_qs(body.decode("utf-8", "replace")).get("password", [""])[0]
-        if PASSWORD and hmac.compare_digest(password.encode(), PASSWORD.encode()):
-            self.send_response(303)
-            secure = "; Secure" if IN_CLOUD else ""
-            self.send_header(
-                "Set-Cookie",
-                "session=%s; Max-Age=%d; Path=/; HttpOnly; SameSite=Strict%s"
-                % (make_session(), SESSION_DAYS * 86400, secure),
-            )
-            self.send_header("Location", "/")
-            self.end_headers()
-            return
-        with failed_lock:
-            failed_logins.append(time.time())
-        time.sleep(1)
-        self.redirect("/login?error=wrong")
 
     def handle_find_airlines(self, body):
         """List the airlines flying a route on its first date (uses 1 search)."""
@@ -311,15 +245,59 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"error": "Invalid request."}, 400)
         try:
             new_routes = parse_routes(data)
+            note = parse_note(data)
         except ValueError as err:
             return self.send_json({"error": str(err)}, 400)
         created_at = prices.now_eastern().isoformat(timespec="seconds")
         saved = []
         for route in new_routes:
-            route_id = db.add_route(*route, created_at)
+            route_id = db.add_route(*route, created_at, note)
             # Get the first price straight away so the chart isn't empty until tomorrow.
             prices.check_route(db.get_route(route_id))
             saved.append(route_summary(db.get_route(route_id)))
+        self.send_json({"routes": saved})
+
+    def handle_edit_trip(self, body):
+        """Save an edited trip. Dates that stay the same keep their price history;
+        new or changed dates start fresh (and use 1 search each now); dates that
+        were removed are deleted."""
+        try:
+            data = json.loads(body)
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            return self.send_json({"error": "Invalid request."}, 400)
+        ids = data.get("route_ids")
+        old = [db.get_route(i) for i in ids] if isinstance(ids, list) and all(isinstance(i, int) for i in ids) else []
+        if not old or not all(old):
+            return self.send_json({"error": "That trip no longer exists. Reload the page."}, 404)
+        try:
+            new_routes = parse_routes(data)
+            note = parse_note(data)
+        except ValueError as err:
+            return self.send_json({"error": str(err)}, 400)
+
+        # A date pair is the same only if the route and trip type are unchanged too.
+        by_dates = {
+            (r["origin"], r["destination"], r["trip_type"], r["depart_date"], r["return_date"]): r
+            for r in old
+        }
+        created_at = prices.now_eastern().isoformat(timespec="seconds")
+        kept, saved = set(), []
+        for route in new_routes:
+            origin, destination, trip_type, depart, back, codes, names = route
+            same = by_dates.get((origin, destination, trip_type, depart, back))
+            if same:
+                db.update_route(same["id"], codes, names, note)
+                kept.add(same["id"])
+                route_id = same["id"]
+            else:
+                route_id = db.add_route(*route, created_at, note)
+                prices.check_route(db.get_route(route_id))
+            saved.append(route_summary(db.get_route(route_id)))
+        for r in old:
+            if r["id"] not in kept:
+                db.delete_route(r["id"])
         self.send_json({"routes": saved})
 
     def handle_scheduled_check(self):
@@ -330,12 +308,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(prices.run_daily_check(scheduled=scheduled))
 
     # --- Helpers ---
-
-    def logged_in(self):
-        if not PASSWORD:
-            return True  # only allowed on your own Mac; see main()
-        cookie = SimpleCookie(self.headers.get("Cookie", ""))
-        return "session" in cookie and valid_session(cookie["session"].value)
 
     def read_body(self):
         try:
@@ -372,8 +344,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    if IN_CLOUD and not PASSWORD:
-        raise SystemExit("Set DASHBOARD_PASSWORD before running in the cloud.")
     if db.using_postgres() and prices.demo_mode():
         # Never mix made-up demo prices into the real price history.
         raise SystemExit("SERPAPI_KEY is missing. Demo prices are only allowed without DATABASE_URL.")

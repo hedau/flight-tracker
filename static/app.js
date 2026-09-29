@@ -59,10 +59,6 @@ const capitalise = (word) => word[0].toUpperCase() + word.slice(1);
 
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { "Content-Type": "application/json" } });
-  if (response.status === 401) {
-    location.href = "/login";
-    throw new Error("Please log in.");
-  }
   const data = await response.json();
   if (data.error && !response.ok) throw new Error(data.error);
   return data;
@@ -72,11 +68,12 @@ let state = { routes: [], today: null, next_check: null, max_dates: 5 };
 let usage = null;             // { used, left, per_month } from SerpApi
 const selectedDate = {};      // trip key -> route id shown in its chart
 const chartRange = {};        // route id -> "14" | "30" | "all"
+let sortBy = "soonest";       // "soonest" | "cheapest" | "drop", remembered in this browser
+try { sortBy = localStorage.getItem("sort") || sortBy; } catch (err) { /* storage blocked */ }
 
 async function loadRoutes() {
   state = await api("/api/routes");
   document.getElementById("demo-banner").hidden = !state.demo;
-  document.getElementById("logout").hidden = !state.login_required;
   renderSummary();
   renderTrips();
   updateBudget();
@@ -112,11 +109,37 @@ function groupTrips(routes) {
     dates: dates.sort((a, b) => a.depart_date.localeCompare(b.depart_date)),
     active: dates.some((d) => d.active),
   }));
-  // Active trips first, then by the soonest departure.
-  return list.sort((a, b) => (b.active - a.active) || a.dates[0].depart_date.localeCompare(b.dates[0].depart_date));
+  // Active trips first, then in the order picked in the Sort menu.
+  const soonest = (a, b) => a.dates[0].depart_date.localeCompare(b.dates[0].depart_date);
+  const price = (trip) => { const d = cheapestDate(trip); return d ? latest(d).price : Infinity; };
+  const drop = (trip) => { const d = cheapestDate(trip); const w = d && weekChange(d); return w == null ? Infinity : w; };
+  const order = sortBy === "cheapest" ? (a, b) => price(a) - price(b) || soonest(a, b)
+    : sortBy === "drop" ? (a, b) => drop(a) - drop(b) || soonest(a, b)
+    : soonest;
+  return list.sort((a, b) => (b.active - a.active) || order(a, b));
 }
 
 const latest = (route) => route.history[route.history.length - 1] || null;
+
+// Price change against the check from a week before the latest one
+// (null until there is a check at least 7 days old).
+function weekChange(route) {
+  const point = latest(route);
+  if (!point) return null;
+  const weekAgo = addDays(point.checked_on, -7);
+  const before = route.history.filter((p) => p.checked_on <= weekAgo);
+  return before.length ? point.price - before[before.length - 1].price : null;
+}
+
+const changeText = (diff) => (diff === 0 ? "No change" : (diff < 0 ? "▼ " : "▲ ") + money(Math.abs(diff)));
+const changeClass = (diff) => (diff < 0 ? "down" : diff > 0 ? "up" : "");
+
+// Opens the same search on Google Flights, to book.
+function googleFlightsUrl(route) {
+  const q = "Flights from " + route.origin + " to " + route.destination + " on " + route.depart_date +
+    (route.return_date ? " through " + route.return_date : " one way");
+  return "https://www.google.com/travel/flights?q=" + encodeURIComponent(q) + "&curr=" + (state.currency || "USD");
+}
 
 // How far a price is below (-) or above (+) the middle of Google's typical range.
 function vsTypical(point) {
@@ -194,6 +217,7 @@ function renderTrips() {
   const container = document.getElementById("trips");
   container.replaceChildren();
   const trips = groupTrips(state.routes);
+  document.getElementById("sort-box").hidden = trips.length < 2;
   if (!trips.length) {
     const empty = el("section", "panel empty");
     empty.append(el("div", "empty-icon", "🛫"), el("h2", null, "No flights tracked yet"));
@@ -207,6 +231,15 @@ function renderTrips() {
   }
   for (const trip of trips) container.append(tripCard(trip));
 }
+
+const sortSelect = document.getElementById("sort");
+sortSelect.value = sortBy;
+if (!sortSelect.value) sortSelect.value = sortBy = "soonest";
+sortSelect.addEventListener("change", () => {
+  sortBy = sortSelect.value;
+  try { localStorage.setItem("sort", sortBy); } catch (err) { /* storage blocked */ }
+  renderTrips();
+});
 
 // Each trip keeps the same colour, based on its route (not its position).
 function tripColour(key) {
@@ -228,6 +261,7 @@ function tripCard(trip) {
   const fromCity = cityOf(first.origin);
   const toCity = cityOf(first.destination);
   if (fromCity || toCity) titleBox.append(el("div", "trip-cities", (fromCity || first.origin) + " to " + (toCity || first.destination)));
+  if (first.note) titleBox.append(el("div", "trip-note", "📝 " + first.note));
 
   const tags = el("div", "tags");
   tags.append(el("span", "tag", first.trip_type === "round_trip" ? "Round trip" : "One-way"));
@@ -245,10 +279,18 @@ function tripCard(trip) {
   if (!trip.active) tags.append(el("span", "tag", "Finished"));
   titleBox.append(tags);
   head.append(titleBox);
+  const buttons = el("div", "head-buttons");
+  if (trip.active) {
+    const edit = el("button", "ghost small-btn", "✏️ Edit trip");
+    edit.type = "button";
+    edit.addEventListener("click", () => openEditForm(trip));
+    buttons.append(edit);
+  }
   const deleteTrip = el("button", "ghost small-btn remove", "🗑 Delete trip");
   deleteTrip.type = "button";
   deleteTrip.addEventListener("click", () => removeTrip(trip));
-  head.append(deleteTrip);
+  buttons.append(deleteTrip);
+  head.append(buttons);
   card.append(head);
 
   // Which date is shown in detail (the cheapest, until you pick another)
@@ -348,6 +390,13 @@ function dateDetail(route, trip) {
   if (point.typical_low != null) subParts.push("Typical " + money(point.typical_low) + "–" + money(point.typical_high));
   main.append(el("div", "hero-sub", subParts.join(" · ")));
   main.append(el("div", "hero-sub", "Checked " + shortDate(point.checked_on) + ", " + checkTime(point.checked_at)));
+  if (route.active) {
+    const book = el("a", "book", "Book on Google Flights ↗");
+    book.href = googleFlightsUrl(route);
+    book.target = "_blank";
+    book.rel = "noopener";
+    main.append(book);
+  }
   top.append(main);
 
   const facts = el("div", "facts");
@@ -359,7 +408,9 @@ function dateDetail(route, trip) {
   if (route.history.length > 1) {
     const diff = point.price - route.history[0].price;
     const lowest = route.history.reduce((a, b) => (b.price < a.price ? b : a));
-    fact("Since first check", diff === 0 ? "No change" : (diff < 0 ? "▼ " : "▲ ") + money(Math.abs(diff)), diff < 0 ? "down" : diff > 0 ? "up" : "");
+    fact("Since first check", changeText(diff), changeClass(diff));
+    const week = weekChange(route);
+    if (week != null) fact("Last 7 days", changeText(week), changeClass(week));
     fact("Lowest seen", money(lowest.price) + " · " + shortDate(lowest.checked_on));
   }
   const daysLeft = daysBetween(state.today, route.depart_date);
@@ -640,11 +691,12 @@ function drawChart(container, { checks, context, band, range }) {
     for (const p of mine.slice(0, -1)) svg("circle", { class: "dot", cx: x(p.date), cy: y(p.price), r: 3.5 }, chart);
   }
 
-  // Lowest of your checks, labelled (if it isn't the latest point)
-  if (mine.length > 2) {
+  // ⭐ on the lowest of your checks (the first one, if it happened twice)
+  if (mine.length > 1) {
     const low = mine.reduce((a, b) => (b.price < a.price ? b : a));
+    svg("text", { class: "star", x: x(low.date), y: y(low.price) - 10, "text-anchor": "middle" }, chart).textContent = "⭐";
     if (low !== mine[mine.length - 1]) {
-      svg("text", { class: "note", x: x(low.date), y: y(low.price) + 18, "text-anchor": "middle" }, chart).textContent = "Low " + money(low.price);
+      svg("text", { class: "note", x: x(low.date), y: y(low.price) + 18, "text-anchor": "middle" }, chart).textContent = "Lowest " + money(low.price);
     }
   }
 
@@ -762,6 +814,8 @@ const formPanel = document.getElementById("form-panel");
 const dateRows = document.getElementById("date-rows");
 const addDateButton = document.getElementById("add-date");
 const tripType = () => form.querySelector("input[name=trip_type]:checked").value;
+let editing = null;       // the trip being edited, or null when adding a new one
+let keptAirlines = null;  // when editing: the trip's airlines, until "Find airlines" is used
 
 function openForm() {
   formPanel.hidden = false;
@@ -774,6 +828,35 @@ function closeForm() {
   formPanel.hidden = true;
   document.getElementById("open-form").hidden = false;
   resetForm();
+}
+
+// Edit: the same form, filled in with the trip's route, dates, airlines and note.
+function openEditForm(trip) {
+  resetForm();
+  editing = trip;
+  const first = trip.dates[0];
+  form.origin.value = first.origin;
+  form.destination.value = first.destination;
+  showAirportHint(form.origin);
+  showAirportHint(form.destination);
+  form.querySelector("input[name=trip_type][value=" + first.trip_type + "]").checked = true;
+  form.note.value = first.note || "";
+  dateRows.replaceChildren();
+  for (const route of trip.dates.filter((d) => d.active)) {
+    const row = addDateRow();
+    row.querySelector(".depart").value = route.depart_date;
+    row.querySelector(".return").value = route.return_date || "";
+  }
+  updateDateRows();
+  if (first.airline_codes.length) {
+    keptAirlines = first.airline_codes.map((code, i) => ({ code, name: first.airlines[i] || code }));
+    airlineHint.textContent = "Tracking only " + first.airlines.join(", ") +
+      ". To change this, use Find airlines (uses 1 search).";
+  }
+  document.getElementById("form-title").textContent = "Edit trip";
+  document.getElementById("add-button").textContent = "Save changes";
+  document.getElementById("edit-dates-hint").hidden = false;
+  openForm();
 }
 
 document.getElementById("open-form").addEventListener("click", openForm);
@@ -866,8 +949,19 @@ function updateDateRows() {
 }
 
 function updateBudget() {
-  const adding = dateRows.children.length;
-  const tracking = state.routes.filter((r) => r.active).length;
+  const rows = [...dateRows.children].map((row) => row.querySelector(".depart").value + "|" + row.querySelector(".return").value);
+  let adding = rows.length;
+  let tracking = state.routes.filter((r) => r.active).length;
+  if (editing) {
+    // Dates that stay the same don't need a new search.
+    const mine = editing.dates.filter((d) => d.active);
+    const first = mine[0];
+    const sameRoute = first && form.origin.value.trim().toUpperCase() === first.origin &&
+      form.destination.value.trim().toUpperCase() === first.destination && tripType() === first.trip_type;
+    const kept = new Set(sameRoute ? mine.map((d) => d.depart_date + "|" + (tripType() === "round_trip" ? d.return_date || "" : "")) : []);
+    adding = rows.filter((key) => !kept.has(key)).length;
+    tracking -= mine.length - (rows.length - adding);
+  }
   const perMonth = (tracking + adding) * 30;
   let text = "Uses " + adding + (adding === 1 ? " search" : " searches") + " now, then about " + perMonth +
     " a month for all " + (tracking + adding) + " tracked dates";
@@ -887,6 +981,11 @@ dateRows.addEventListener("change", updateDateRows);
 addDateButton.addEventListener("click", () => addDateRow().querySelector(".depart").focus());
 
 function resetForm() {
+  editing = null;
+  keptAirlines = null;
+  document.getElementById("form-title").textContent = "Track a flight";
+  document.getElementById("add-button").textContent = "Start tracking";
+  document.getElementById("edit-dates-hint").hidden = true;
   form.reset();
   dateRows.replaceChildren();
   addDateRow();
@@ -964,7 +1063,10 @@ function clearAirlines(message) {
 }
 
 function routeChanged() {
-  if (!airlineList.hidden) clearAirlines("The route changed, so find its airlines again (or skip to track any airline).");
+  if (!airlineList.hidden || keptAirlines) {
+    keptAirlines = null;
+    clearAirlines("The route changed, so find its airlines again (or skip to track any airline).");
+  }
 }
 form.origin.addEventListener("change", routeChanged);
 form.destination.addEventListener("change", routeChanged);
@@ -986,6 +1088,7 @@ airlineBoxes.addEventListener("change", updateSelectAll);
 
 // Which airlines to send: [] means any airline.
 function chosenAirlines() {
+  if (airlineList.hidden && keptAirlines) return keptAirlines;
   const boxes = airlineCheckboxes();
   const ticked = boxes.filter((b) => b.checked);
   if (ticked.length === boxes.length) return [];
@@ -1000,12 +1103,22 @@ form.addEventListener("submit", async (event) => {
     error.textContent = "Tick at least one airline, or tick “Select all”.";
     return;
   }
-  const request = Object.assign(routeFromForm(), { airlines: chosenAirlines() });
+  const request = Object.assign(routeFromForm(), { airlines: chosenAirlines(), note: form.note.value });
+  const wasEditing = editing;
+  if (wasEditing) request.route_ids = wasEditing.dates.filter((d) => d.active).map((d) => d.id);
   error.textContent = "";
   button.disabled = true;
-  button.textContent = request.dates.length > 1 ? "Checking " + request.dates.length + " prices…" : "Checking price…";
+  button.textContent = wasEditing ? "Saving…"
+    : request.dates.length > 1 ? "Checking " + request.dates.length + " prices…" : "Checking price…";
   try {
-    const { routes } = await api("/api/routes", { method: "POST", body: JSON.stringify(request) });
+    const { routes } = await api(wasEditing ? "/api/routes/edit" : "/api/routes", { method: "POST", body: JSON.stringify(request) });
+    if (wasEditing) {
+      showToast("Saved changes to " + routes[0].origin + " → " + routes[0].destination);
+      closeForm();
+      await loadRoutes();
+      loadUsage();
+      return;
+    }
     const found = routes.map(latest).filter(Boolean).map((p) => p.price);
     showToast("Now tracking " + routes[0].origin + " → " + routes[0].destination +
       (found.length ? " · from " + money(Math.min(...found)) : ""));
@@ -1017,7 +1130,7 @@ form.addEventListener("submit", async (event) => {
     error.textContent = err.message;
   } finally {
     button.disabled = false;
-    button.textContent = "Start tracking";
+    button.textContent = editing ? "Save changes" : "Start tracking";
   }
 });
 

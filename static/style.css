@@ -256,14 +256,6 @@ details.airline-tag summary::-webkit-details-marker { display: none; }
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25); max-width: calc(100% - 32px);
 }
 
-/* Login page */
-.login { max-width: 380px; margin: 14vh auto 0; }
-.login form { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
-.login label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-2); font-weight: 600; }
-.login input { padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--text); }
-.login button { background: var(--accent); color: var(--accent-text); font-weight: 600; padding: 10px; }
-.login .error { min-height: 1.3em; }
-
 /* =====================================================================
    Colour: sky-themed page, gradient header, and a colour for each trip
    ===================================================================== */
@@ -365,3 +357,22 @@ body { background: var(--page) fixed, var(--bg); min-height: 100vh; }
 .pill { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: 0.03em; padding: 2px 8px; border-radius: 999px; margin-left: 8px; }
 .pill.cheap { background: var(--good-soft); color: var(--good); }
 .pill.value { background: var(--accent-soft); color: var(--accent); }
+
+/* ---------- Notes, edit, booking, sorting ---------- */
+.head-right { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px 14px; }
+.sort-box { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-2); }
+.sort-box select {
+  font: inherit; color: var(--text); background: var(--surface); padding: 7px 10px;
+  border: 1px solid var(--border); border-radius: 10px;
+}
+.sort-box select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.note-field { margin-top: 18px; }
+.trip-note { font-size: 14px; color: var(--text-2); margin-top: 6px; overflow-wrap: anywhere; }
+.head-buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.book {
+  display: inline-block; margin-top: 10px; padding: 7px 12px; border-radius: 10px;
+  background: var(--series); color: #fff; font-size: 14px; font-weight: 600; text-decoration: none;
+}
+.book:hover { filter: brightness(1.1); }
+.book:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chart .star { font-size: 14px; }

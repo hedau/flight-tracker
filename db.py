@@ -58,6 +58,7 @@ ADDED_COLUMNS = [
     ("prices", "typical_low", "INTEGER"),
     ("prices", "typical_high", "INTEGER"),
     ("prices", "options", "TEXT"),  # the top flights as JSON
+    ("routes", "note", "TEXT"),
 ]
 
 
@@ -123,15 +124,23 @@ def init():
 # --- Routes -----------------------------------------------------------------
 
 def add_route(origin, destination, trip_type, depart_date, return_date,
-              airlines, airline_names, created_at):
+              airlines, airline_names, created_at, note=None):
     """airlines is a comma-separated list of airline codes like "DL,UA", or None
     for any airline; airline_names holds their names, like "Delta,United"."""
     row = execute(
         "INSERT INTO routes (origin, destination, trip_type, depart_date, return_date,"
-        " airlines, airline_names, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
-        (origin, destination, trip_type, depart_date, return_date, airlines, airline_names, created_at),
+        " airlines, airline_names, created_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        (origin, destination, trip_type, depart_date, return_date, airlines, airline_names, created_at, note),
     )
     return row["id"]
+
+
+def update_route(route_id, airlines, airline_names, note):
+    """Change what can be edited without losing the price history."""
+    execute(
+        "UPDATE routes SET airlines = ?, airline_names = ?, note = ? WHERE id = ?",
+        (airlines, airline_names, note, route_id),
+    )
 
 
 def get_route(route_id):

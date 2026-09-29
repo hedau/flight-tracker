@@ -14,9 +14,6 @@
         <span class="brand-mark" aria-hidden="true">✈</span>
         <span>Flight Tracker</span>
       </div>
-      <form method="post" action="/logout" id="logout" hidden>
-        <button class="ghost" type="submit">Log out</button>
-      </form>
     </div>
   </header>
 
@@ -43,7 +40,16 @@
 
     <div class="section-head">
       <h1>Your trips</h1>
-      <button class="primary" id="open-form" type="button">+ Track a flight</button>
+      <div class="head-right">
+        <label class="sort-box" id="sort-box" hidden>Sort
+          <select id="sort">
+            <option value="soonest">Soonest departure</option>
+            <option value="cheapest">Cheapest</option>
+            <option value="drop">Biggest drop (7 days)</option>
+          </select>
+        </label>
+        <button class="primary" id="open-form" type="button">+ Track a flight</button>
+      </div>
     </div>
 
     <!-- Add-flight form -->
@@ -75,6 +81,7 @@
 
         <fieldset>
           <legend>Dates <span class="muted">· each one is tracked separately</span></legend>
+          <p class="muted small" id="edit-dates-hint" hidden>Dates you don't change keep their price history. New or changed dates start fresh and use 1 search each now. Removed dates are deleted with their history.</p>
           <div id="date-rows"></div>
           <button type="button" class="ghost small-btn" id="add-date">+ Add another date</button>
         </fieldset>
@@ -88,6 +95,10 @@
             <div class="chips" id="airlines"></div>
           </div>
         </fieldset>
+
+        <label class="field note-field"><span>Note <span class="muted">· optional</span></span>
+          <input name="note" id="note" maxlength="80" placeholder="e.g. Family trip for Mom's birthday">
+        </label>
 
         <div class="form-foot">
           <button type="submit" class="primary" id="add-button">Start tracking</button>
